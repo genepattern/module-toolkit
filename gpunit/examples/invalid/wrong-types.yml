@@ -1,0 +1,4 @@
+name: 123  # Should be string
+module: ["should", "be", "string"]  # Should be string
+params: "should be dict"  # Should be dict
+assertions: []  # Should be dict

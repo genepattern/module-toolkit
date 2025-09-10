@@ -1,0 +1,22 @@
+# Run this gpunit localy by calling:
+# ant -f ${GPUNIT_HOME}/build.xml -Dgpunit.diffStripTrailingCR="--strip-trailing-cr" -Dgp.host="127.0.0.1" -Dgp.url="http://127.0.0.1:8080" -Dgp.user="edjuaro@gmail.com" -Dgp.password="" -Dgpunit.testfolder=`pwd` gpunit
+# OR using gp-beta-ami:
+# ant -f ${GPUNIT_HOME}/build.xml -Dgpunit.diffStripTrailingCR="--strip-trailing-cr" -Dgp.host="beta.genepattern.org" -Dgp.url="https://beta.genepattern.org" -Dgp.user="**USERNAME**" -Dgp.password="**PUT_PASSWORD_HERE" -Dgpunit.testfolder=`pwd` gpunit
+
+#
+# Note: this test uses a custom diff command
+#
+
+name: "tfsites.CompareAcrossSeqsFromGenomicVariants - Basic test"
+module: tfsites.CompareAcrossSeqsFromGenomicVariants
+params:
+    genome.file: "https://datasets-tfsites-org.s3.us-east-2.amazonaws.com/hosted_data/genomes/binary/hg19.fa.chr2seq.pydict.pickle" 
+    variant.file: "data/06-input_law2025_cancer_variants.tsv"
+    tf.affinity.information:  "data/06-input_tf-affinity-info.tsv"
+    tf.affinity.files: "data/06-input_ets1-pbm.tsv"
+    window.size: 8
+    minimum.binding.change: 0.2
+    minimum.pwm.score: 0.8
+    analysis.name: "output"
+assertions:
+    jobStatus: success

@@ -1,0 +1,5 @@
+name: "Test with missing fields"
+# Missing module field
+params:
+    input: "test.txt"
+# Missing assertions field

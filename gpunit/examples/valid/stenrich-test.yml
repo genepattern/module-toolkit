@@ -1,0 +1,16 @@
+name: "spatialGE.STenrich - Basic test"
+module: spatialGE.STenrich
+params:
+    input.file: "../data/lung.rds"
+    gene.sets.database: "https://data.broadinstitute.org/gsea-msigdb/msigdb/release/2024.1.Hs/h.all.v2024.1.Hs.symbols.gmt"
+    permutations: 10
+    random.seed: 1234
+    minimum.spots: 5
+    minimum.genes: 5
+    standard.deviation: 1.0
+    filter.p.values: 0.05
+    filter.gene.proportion: 0.3
+    job.memory: "16Gb"
+    job.cpuCount: 7
+assertions:
+    jobStatus: success

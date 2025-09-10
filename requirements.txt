@@ -1,0 +1,5 @@
+# GenePattern Module Toolkit - Requirements
+# Production dependencies for all linters
+
+# Required for GPUnit linter (.yml file parsing)
+PyYAML>=6.0,<7.0

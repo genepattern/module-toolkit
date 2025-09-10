@@ -1,0 +1,7 @@
+name: "Invalid YAML test"
+module: TestModule
+params:
+    input: "test.txt"
+    invalid: [unclosed list
+assertions:
+    jobStatus: success

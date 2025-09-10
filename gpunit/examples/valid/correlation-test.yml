@@ -1,0 +1,16 @@
+#
+# Comments are okay
+#
+
+name: "CorrelationMatrix - Basic test"
+module: urn:lsid:genepattern.org:module.analysis:00474
+params:
+    input: "data/example_input.gct"
+    method: "pearson"
+    dimension: "column"
+    output:  "output.gct"
+assertions:
+    diffCmd: diff <%gpunit.diffStripTrailingCR%> -q
+    files:
+        "output.gct":
+            diff: "data/example_output.gct"
