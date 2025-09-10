@@ -1,0 +1,27 @@
+[
+    {
+        "name": "Required",
+        "description": "Essential parameters for running the spatial clustering analysis.",
+        "hidden": false,
+        "parameters": [
+            "input.file",
+            "output.file",
+            "tissue.images"
+        ]
+    },
+    {
+        "name": "Optional",
+        "description": "Optional parameters for customizing the analysis.",
+        "hidden": false,
+        "parameters": [
+            "spatial.weight",
+            "distance.metric",
+            "linkage.method",
+            "dynamic.tree.cut",
+            "minimum.clusters",
+            "maximum.clusters",
+            "number.of.genes",
+            "deep.split"
+        ]
+    }
+]

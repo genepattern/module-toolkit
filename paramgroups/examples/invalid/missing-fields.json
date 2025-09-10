@@ -1,0 +1,13 @@
+[
+    {
+        "name": "Complete Group",
+        "parameters": ["param1", "param2"]
+    },
+    {
+        "description": "Missing name field",
+        "parameters": ["param3"]
+    },
+    {
+        "name": "Missing parameters field"
+    }
+]

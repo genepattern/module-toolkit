@@ -1,0 +1,11 @@
+[
+    {
+        "name": "Valid Group",
+        "parameters": ["param1", "param2"]
+    },
+    {
+        "name": "Empty Group",
+        "description": "This group has no parameters",
+        "parameters": []
+    }
+]

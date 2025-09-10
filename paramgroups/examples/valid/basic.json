@@ -1,0 +1,13 @@
+[
+    {
+        "name": "Basic parameters", 
+        "description": "These parameters are essential for the operation.", 
+        "parameters": ["dataset.file", "chip.platform", "collapse.mode"]
+    },
+    {
+        "name": "Advanced parameters", 
+        "description": "Additional parameters with standard defaults.", 
+        "hidden": true, 
+        "parameters": ["omit.features.with.no.symbol.match", "dev.mode"]
+    }
+]
