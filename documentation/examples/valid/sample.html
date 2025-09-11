@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>CorrelationMatrix Module Documentation</title>
+</head>
+<body>
+    <h1>CorrelationMatrix Module</h1>
+    <p>This module calculates correlation matrices from gene expression data.</p>
+    
+    <h2>Parameters</h2>
+    <ul>
+        <li><strong>input</strong> - Input GCT file containing gene expression data</li>
+        <li><strong>method</strong> - Correlation method (pearson, spearman, kendall)</li>
+        <li><strong>dimension</strong> - Calculate correlations across rows or columns</li>
+        <li><strong>output</strong> - Output file name for the correlation matrix</li>
+    </ul>
+    
+    <h2>Usage</h2>
+    <p>The CorrelationMatrix module can be used to analyze relationships between genes or samples.</p>
+    
+    <h2>Examples</h2>
+    <p>Use with default Pearson correlation:</p>
+    <code>CorrelationMatrix input=data.gct method=pearson dimension=column output=correlation.gct</code>
+</body>
+</html>

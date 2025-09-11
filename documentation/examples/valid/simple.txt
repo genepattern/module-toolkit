@@ -1,0 +1,21 @@
+BASIC MODULE DOCUMENTATION
+
+Module: tfsites.CompareAcrossSeqsFromGenomicVariants
+
+This module compares transcription factor binding sites across sequences from genomic variants.
+
+PARAMETERS:
+- genome.file: Reference genome file in pickle format
+- variant.file: Input file containing genomic variants (TSV format)
+- tf.affinity.information: Transcription factor affinity information file
+- tf.affinity.files: TF affinity data files
+- window.size: Size of window around variants (default: 10)
+- minimum.binding.change: Minimum binding affinity change threshold (default: 0.1)
+- minimum.pwm.score: Minimum PWM score threshold (default: 0.5)
+- analysis.name: Name for the analysis output
+
+USAGE:
+Run this module to identify variants that significantly affect transcription factor binding.
+
+OUTPUT:
+The module generates binding affinity change scores and identifies significant variants.
