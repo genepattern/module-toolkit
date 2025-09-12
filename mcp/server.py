@@ -2,29 +2,72 @@
 """
 MCP Server for GenePattern Module Toolkit Linters
 
-This MCP server exposes the project's linters as tools that can be called 
-by MCP-compatible clients. Each linter is exposed as a separate tool.
+This server exposes the GenePattern module toolkit linters as MCP (Model Context Protocol) tools.
+It provides a unified interface for validating various types of module files including:
+- Dockerfiles
+- Documentation files
+- GPUnit YAML files  
+- Manifest files
+- Paramgroups JSON files
+- Wrapper scripts
 
-Uses the official MCP Python SDK to provide proper MCP protocol support.
-The tools are defined in tools.py and automatically registered.
+The server uses the official Python MCP SDK and requires Python 3.10+.
 
-Available tools:
-- validate_dockerfile: Validates Dockerfiles
-- validate_documentation: Validates documentation files/URLs  
-- validate_gpunit: Validates GPUnit YAML files
-- validate_manifest: Validates GenePattern manifest files
-- validate_paramgroups: Validates paramgroups.json files
-- validate_wrapper: Validates wrapper scripts
+Usage:
+    python server.py
+    # or from parent directory:
+    python mcp/server.py
+
+The server will start and listen for MCP connections over stdio.
 """
 
 import asyncio
+import sys
+import os
 
-from mcp.server import Server
-from mcp.server.stdio import stdio_server
-from mcp.types import Tool
+# Add current directory to path to support running from both . and ./mcp/
+current_dir = os.path.dirname(os.path.abspath(__file__))
+parent_dir = os.path.dirname(current_dir)
+sys.path.insert(0, current_dir)
+sys.path.insert(0, parent_dir)
+
+try:
+    from mcp.server import Server
+    from mcp.server.stdio import stdio_server
+    from mcp.types import Tool
+except ImportError as e:
+    print(f"Error: Could not import MCP package. Please ensure 'mcp[cli]' is installed.")
+    print(f"Install with: pip install 'mcp[cli]'")
+    print(f"Import error: {e}")
+    sys.exit(1)
 
 # Import tools module to register all tools
-from tools import setup_tools
+# Handle running from different directories
+setup_tools = None
+
+# First try importing from current directory (when running from mcp/)
+try:
+    from tools import setup_tools
+except ImportError:
+    pass
+
+# If that didn't work, try importing as a relative module from parent directory
+if setup_tools is None:
+    try:
+        import importlib.util
+        tools_path = os.path.join(current_dir, "tools.py")
+        spec = importlib.util.spec_from_file_location("tools", tools_path)
+        tools_module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(tools_module)
+        setup_tools = tools_module.setup_tools
+    except Exception as e:
+        print(f"Error: Could not import tools module: {e}")
+        print("Make sure you're running from the project root or mcp/ directory.")
+        sys.exit(1)
+
+if setup_tools is None:
+    print("Error: Could not load tools module")
+    sys.exit(1)
 
 # Create the server instance
 server = Server("genepattern-linter-server")
@@ -37,8 +80,7 @@ setup_tools(server)
 async def handle_list_tools():
     """List available tools - MCP framework requires this handler."""
     # The framework should automatically detect tools, but we need this handler
-    # to enable the tools capability. Return empty list since tools are auto-detected.
-    from mcp.types import Tool
+    # to enable the tools capability.
     return [
         Tool(
             name="run_linter",

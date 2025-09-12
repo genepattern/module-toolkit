@@ -12,7 +12,13 @@ import traceback
 from contextlib import redirect_stderr, redirect_stdout
 from typing import Any, Dict, Optional
 
-from mcp.types import TextContent
+try:
+    from mcp.types import TextContent
+except ImportError as e:
+    print(f"Error: Could not import MCP package. Please ensure 'mcp[cli]' is installed.")
+    print(f"Install with: pip install 'mcp[cli]'")
+    print(f"Import error: {e}")
+    sys.exit(1)
 
 # Add the parent directory to the path so we can import the linters
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
