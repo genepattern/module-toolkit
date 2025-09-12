@@ -33,8 +33,8 @@ sys.path.insert(0, parent_dir)
 
 try:
     from mcp.server import Server
-    from mcp.server.stdio import stdio_server
-    from mcp.types import Tool
+    from mcp.server.stdio import stdio_server  # pyright: ignore[reportMissingImports]
+    from mcp.types import Tool  # pyright: ignore[reportMissingImports]
 except ImportError as e:
     print(f"Error: Could not import MCP package. Please ensure 'mcp[cli]' is installed.")
     print(f"Install with: pip install 'mcp[cli]'")
