@@ -28,7 +28,7 @@ import importlib.util
 import os
 import sys
 from dataclasses import dataclass
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
 
 @dataclass
@@ -120,7 +120,7 @@ def discover_tests() -> List[str]:
     return sorted(test_files)
 
 
-def run_modular_tests(gpunit_path: str, **test_kwargs) -> tuple[bool, List[LintIssue]]:
+def run_modular_tests(gpunit_path: str, **test_kwargs) -> Tuple[bool, List[LintIssue]]:
     """Run all discovered test modules against a GPUnit file.
     
     Args:
@@ -242,6 +242,7 @@ def main(argv: List[str]) -> int:
     # Process each GPUnit file
     overall_passed = True
     total_files = len(gpunit_files)
+    file_results = []  # Track results to avoid re-running tests
     
     for i, gpunit_file in enumerate(gpunit_files):
         if total_files > 1:
@@ -253,16 +254,14 @@ def main(argv: List[str]) -> int:
         
         # Run modular tests on this file
         passed, issues = run_modular_tests(gpunit_file, **test_kwargs)
+        file_results.append((gpunit_file, passed, issues))
         
         if not passed:
             overall_passed = False
         
         # Output results for this file
         if passed:
-            if total_files > 1:
-                print(f"\nPASS: GPUnit file '{gpunit_file}' passed all validation checks.")
-            else:
-                print(f"\nPASS: GPUnit file '{gpunit_file}' passed all validation checks.")
+            print(f"\nPASS: GPUnit file '{gpunit_file}' passed all validation checks.")
         else:
             error_count = sum(1 for i in issues if i.severity == "ERROR")
             warning_count = sum(1 for i in issues if i.severity == "WARNING")
@@ -279,8 +278,7 @@ def main(argv: List[str]) -> int:
     
     # Final summary for multiple files
     if total_files > 1:
-        passed_count = sum(1 for gpunit_file in gpunit_files 
-                          if run_modular_tests(gpunit_file, **test_kwargs)[0])
+        passed_count = sum(1 for _, passed, _ in file_results if passed)
         failed_count = total_files - passed_count
         
         print(f"\n{'='*60}")
