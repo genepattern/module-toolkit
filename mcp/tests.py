@@ -11,8 +11,8 @@ import sys
 from pathlib import Path
 
 # Import MCP client components
-from mcp.client.session import ClientSession
-from mcp.client.stdio import stdio_client, StdioServerParameters
+from mcp.client.session import ClientSession  # pyright: ignore[reportMissingImports]
+from mcp.client.stdio import stdio_client, StdioServerParameters  # pyright: ignore[reportMissingImports]
 
 
 async def test_server():
