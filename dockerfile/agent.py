@@ -3,6 +3,11 @@ import sys
 from pathlib import Path
 from pydantic_ai import Agent, RunContext
 from pydantic_ai.mcp import MCPServerStdio
+from dotenv import load_dotenv
+
+
+# Load environment variables from .env file
+load_dotenv()
 
 
 system_prompt = """
@@ -59,6 +64,8 @@ def analyze_tool_requirements(context: RunContext[str], tool_name: str, language
     Returns:
         Analysis of tool requirements for Dockerfile generation
     """
+    print(f"🐳 DOCKERFILE TOOL: Running analyze_tool_requirements for '{tool_name}' (language: {language or 'unknown'}, deps: {'Yes' if dependencies else 'No'})")
+    
     analysis = f"Analyzing requirements for {tool_name}:\n"
     
     if language:
@@ -92,6 +99,7 @@ def analyze_tool_requirements(context: RunContext[str], tool_name: str, language
     analysis += "- Use --no-cache-dir for pip installs\n"
     analysis += "- Clean up package caches to reduce image size\n"
     
+    print("✅ DOCKERFILE TOOL: analyze_tool_requirements completed successfully")
     return analysis
 
 
@@ -106,6 +114,8 @@ def suggest_optimizations(context: RunContext[str], dockerfile_content: str) -> 
     Returns:
         Optimization suggestions
     """
+    print(f"🐳 DOCKERFILE TOOL: Running suggest_optimizations (Dockerfile length: {len(dockerfile_content)} chars)")
+    
     optimizations = []
     
     lines = dockerfile_content.strip().split('\n')
@@ -131,4 +141,5 @@ def suggest_optimizations(context: RunContext[str], dockerfile_content: str) -> 
     else:
         result += "Dockerfile appears well-optimized for size and caching."
     
+    print("✅ DOCKERFILE TOOL: suggest_optimizations completed successfully")
     return result
