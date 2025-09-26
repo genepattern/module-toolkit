@@ -596,3 +596,68 @@ def optimize_documentation_structure(context: RunContext[str], existing_content:
     
     print("✅ DOCUMENTATION TOOL: optimize_documentation_structure completed successfully")
     return analysis
+
+
+@documentation_agent.tool
+def create_documentation(context: RunContext[str], tool_info: Dict[str, Any], planning_data: Dict[str, Any], attempt: int = 1) -> str:
+    """
+    Generate comprehensive user documentation (README.md) for the GenePattern module.
+    
+    Args:
+        tool_info: Dictionary with tool information (name, version, language, description)
+        planning_data: Planning phase results with parameters and context
+        attempt: Attempt number for retry logic
+    
+    Returns:
+        Complete README.md content ready for validation
+    """
+    print(f"📚 DOCUMENTATION TOOL: Running create_documentation for '{tool_info.get('name', 'unknown')}' (attempt {attempt})")
+    
+    # Extract parameter information from planning data
+    parameters = planning_data.get('parameters', [])
+    param_info = ""
+    if parameters:
+        param_info = "\nParameters identified from planning:\n"
+        for param in parameters:
+            required_status = 'Required' if param.get('required', False) else 'Optional'
+            param_info += f"- {param.get('name', 'unknown')}: {param.get('type', 'unknown')} ({required_status}) - {param.get('description', 'No description')}\n"
+    
+    base_info = f"""
+    Tool Information:
+    - Name: {tool_info['name']}
+    - Version: {tool_info['version']}
+    - Language: {tool_info['language']}
+    - Description: {tool_info.get('description', 'Not provided')}
+    
+    Planning Context:
+    {planning_data.get('plan', 'No detailed plan available')}
+    """
+    
+    prompt = f"""
+    Generate comprehensive user documentation (README.md) for the GenePattern module for {tool_info['name']}.
+    
+    {base_info}
+    {param_info}
+    
+    Requirements:
+    - Create user-friendly documentation for mixed audience (novice and expert)
+    - Include clear module overview and purpose
+    - Provide detailed parameter descriptions with biological context
+    - Include practical usage examples and workflows
+    - Add troubleshooting section for common issues
+    - Structure content with proper headings and sections
+    - Use Markdown formatting for readability
+    
+    Generate ONLY the README.md content in Markdown format, no explanations or additional text.
+    """
+    
+    if attempt > 1:
+        prompt += f"\n\nThis is attempt {attempt}. Please address any validation issues from previous attempts."
+    
+    try:
+        result = documentation_agent.run_sync(prompt)
+        print("✅ DOCUMENTATION TOOL: create_documentation completed successfully")
+        return result.output
+    except Exception as e:
+        print(f"❌ DOCUMENTATION TOOL: create_documentation failed: {e}")
+        raise

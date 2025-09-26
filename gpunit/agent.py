@@ -531,3 +531,84 @@ def optimize_test_coverage(context: RunContext[str], existing_tests: List[Dict[s
     
     print("✅ GPUNIT TOOL: optimize_test_coverage completed successfully")
     return analysis
+
+
+@gpunit_agent.tool
+def create_gpunit(context: RunContext[str], tool_info: Dict[str, Any], planning_data: Dict[str, Any], attempt: int = 1) -> str:
+    """
+    Generate a comprehensive GPUnit test definition (test.yml) for the GenePattern module.
+    
+    Args:
+        tool_info: Dictionary with tool information (name, version, language, description)
+        planning_data: Planning phase results with parameters and context
+        attempt: Attempt number for retry logic
+    
+    Returns:
+        Complete GPUnit YAML content ready for validation
+    """
+    print(f"🧪 GPUNIT TOOL: Running create_gpunit for '{tool_info.get('name', 'unknown')}' (attempt {attempt})")
+    
+    # Extract parameter information from planning data for test generation
+    parameters = planning_data.get('parameters', [])
+    param_info = ""
+    if parameters:
+        param_info = "\nParameters identified from planning:\n"
+        for param in parameters:
+            required_status = 'Required' if param.get('required', False) else 'Optional'
+            param_info += f"- {param.get('name', 'unknown')}: {param.get('type', 'unknown')} ({required_status}) - {param.get('description', 'No description')}\n"
+    
+    # Module LSID generation
+    module_lsid = f"urn:lsid:genepattern.org:module.analysis:{tool_info['name'].lower().replace(' ', '')}"
+    
+    base_info = f"""
+    Tool Information:
+    - Name: {tool_info['name']}
+    - Version: {tool_info['version']}
+    - Language: {tool_info['language']}
+    - Description: {tool_info.get('description', 'Not provided')}
+    
+    Planning Context:
+    {planning_data.get('plan', 'No detailed plan available')}
+    """
+    
+    prompt = f"""
+    Generate a comprehensive GPUnit test definition (test.yml) for the GenePattern module for {tool_info['name']}.
+    
+    {base_info}
+    {param_info}
+    
+    Module LSID: {module_lsid}
+    
+    Requirements:
+    - Create a GPUnit YAML test file that validates core module functionality
+    - Include realistic test parameters that exercise key features
+    - Define clear assertions for output validation
+    - Use representative input data and expected outputs
+    - Follow GPUnit specification format exactly
+    - Include both file existence checks and content comparison
+    - Test essential parameter combinations
+    
+    GPUnit YAML Structure Required:
+    name: "Descriptive test name"
+    module: {module_lsid}
+    params:
+      [parameter_name]: "[parameter_value]"
+    assertions:
+      diffCmd: diff <%gpunit.diffStripTrailingCR%> -q
+      files:
+        "[output_file]":
+          diff: "[expected_file]"
+    
+    Generate ONLY the GPUnit YAML content, no explanations or markdown formatting.
+    """
+    
+    if attempt > 1:
+        prompt += f"\n\nThis is attempt {attempt}. Please address any validation issues from previous attempts."
+    
+    try:
+        result = gpunit_agent.run_sync(prompt)
+        print("✅ GPUNIT TOOL: create_gpunit completed successfully")
+        return result.output
+    except Exception as e:
+        print(f"❌ GPUNIT TOOL: create_gpunit failed: {e}")
+        raise

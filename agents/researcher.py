@@ -56,7 +56,6 @@ DEFAULT_LLM_MODEL = os.getenv('DEFAULT_LLM_MODEL', 'bedrock:us.anthropic.claude-
 # Create agent with MCP tools access
 researcher_agent = Agent(DEFAULT_LLM_MODEL, system_prompt=system_prompt)
 
-
 @researcher_agent.tool
 def web_search(context: RunContext[str], query: str, num_results: int = 5) -> str:
     """
@@ -512,8 +511,12 @@ def create_tool_research_report(context: RunContext[str], tool_name: str, resear
     
     parameters = []
     for finding in research_findings:
-        if finding.get('type') == 'parameters':
+        # Handle both string and dict formats for findings
+        if isinstance(finding, dict) and finding.get('type') == 'parameters':
             parameters.extend(finding.get('data', []))
+        elif isinstance(finding, str):
+            # Treat strings as parameter names
+            parameters.append(finding)
     
     if parameters:
         report += "### Identified Parameters\n\n"
@@ -521,10 +524,22 @@ def create_tool_research_report(context: RunContext[str], tool_name: str, resear
         report += "|-----------|------|-------------|--------------------|\n"
         
         for param in parameters[:20]:  # Limit to 20 for readability
-            param_name = param.get('name', 'Unknown')
-            param_type = param.get('type', 'Unknown')
-            param_desc = param.get('description', 'No description')[:50]
-            gp_mapping = param.get('genepattern_type', 'TBD')
+            # Handle both string and dict parameter formats
+            if isinstance(param, dict):
+                param_name = param.get('name', 'Unknown')
+                param_type = param.get('type', 'Unknown')
+                param_desc = param.get('description', 'No description')[:50]
+                gp_mapping = param.get('genepattern_type', 'TBD')
+            elif isinstance(param, str):
+                param_name = param
+                param_type = 'Unknown'
+                param_desc = 'Parameter identified from research'
+                gp_mapping = 'TBD'
+            else:
+                param_name = str(param)
+                param_type = 'Unknown'
+                param_desc = 'Parameter format not recognized'
+                gp_mapping = 'TBD'
             
             report += f"| {param_name} | {param_type} | {param_desc}... | {gp_mapping} |\n"
         

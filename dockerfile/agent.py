@@ -1,6 +1,7 @@
 import os
 import sys
 from pathlib import Path
+from typing import Dict, Any
 from pydantic_ai import Agent, RunContext
 from pydantic_ai.mcp import MCPServerStdio
 from dotenv import load_dotenv
@@ -143,3 +144,57 @@ def suggest_optimizations(context: RunContext[str], dockerfile_content: str) -> 
     
     print("✅ DOCKERFILE TOOL: suggest_optimizations completed successfully")
     return result
+
+
+@dockerfile_agent.tool
+def create_dockerfile(context: RunContext[str], tool_info: Dict[str, Any], planning_data: Dict[str, Any], attempt: int = 1) -> str:
+    """
+    Generate a complete Dockerfile for the GenePattern module.
+    
+    Args:
+        tool_info: Dictionary with tool information (name, version, language, description)
+        planning_data: Planning phase results with parameters and context
+        attempt: Attempt number for retry logic
+    
+    Returns:
+        Complete Dockerfile content ready for validation
+    """
+    print(f"🐳 DOCKERFILE TOOL: Running create_dockerfile for '{tool_info.get('name', 'unknown')}' (attempt {attempt})")
+    
+    base_info = f"""
+    Tool Information:
+    - Name: {tool_info['name']}
+    - Version: {tool_info['version']}
+    - Language: {tool_info['language']}
+    - Description: {tool_info.get('description', 'Not provided')}
+    
+    Planning Context:
+    {planning_data.get('plan', 'No detailed plan available')}
+    """
+    
+    prompt = f"""
+    Generate a production-ready Dockerfile for the GenePattern module for {tool_info['name']}.
+    
+    {base_info}
+    
+    Requirements:
+    - Use appropriate base image for {tool_info['language']} if specified
+    - Install the {tool_info['name']} tool and its dependencies
+    - Follow Docker best practices for size optimization and security
+    - Ensure the container can execute the tool properly
+    - Include proper labels and metadata
+    - Set up appropriate working directory and permissions
+    
+    Generate ONLY the Dockerfile content, no explanations or markdown formatting.
+    """
+    
+    if attempt > 1:
+        prompt += f"\n\nThis is attempt {attempt}. Please address any validation issues from previous attempts."
+    
+    try:
+        result = dockerfile_agent.run_sync(prompt)
+        print("✅ DOCKERFILE TOOL: create_dockerfile completed successfully")
+        return result.output
+    except Exception as e:
+        print(f"❌ DOCKERFILE TOOL: create_dockerfile failed: {e}")
+        raise

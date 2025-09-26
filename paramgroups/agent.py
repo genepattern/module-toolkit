@@ -17,6 +17,8 @@ You are an expert UX designer and bioinformatician specializing in creating intu
 organization for GenePattern modules. Your task is to generate well-structured paramgroups.json 
 files that provide optimal user experience by logically grouping related parameters.
 
+CRITICAL: Your output must ALWAYS be valid JSON only - no markdown, no explanations, no text before or after the JSON.
+
 Key requirements for GenePattern paramgroups:
 - Group related parameters together for intuitive workflows
 - Create clear, descriptive group names that users understand
@@ -41,8 +43,7 @@ Best Practices:
 - Ensure every parameter appears in exactly one group
 - Order groups by typical workflow sequence
 
-Always generate complete, valid paramgroups.json files that enhance user experience
-and follow GenePattern UI conventions.
+REMEMBER: Output ONLY valid JSON. No explanations, no markdown, no additional text.
 """
 
 # Use DEFAULT_LLM_MODEL from environment, fallback to a reasonable default
@@ -200,249 +201,56 @@ def analyze_parameter_groupings(context: RunContext[str], parameters: List[Dict[
     
     # Grouping recommendations
     analysis += "**Recommendations:**\n"
-    analysis += f"- Total parameters distributed: {total_params}/{len(parameters)}\n"
-    
-    if total_params < len(parameters):
-        analysis += f"- WARNING: {len(parameters) - total_params} parameters not categorized\n"
-    
-    # Group size analysis
-    non_empty_groups = [g for g in groups.values() if g]
-    if non_empty_groups:
-        avg_size = sum(len(g) for g in non_empty_groups) / len(non_empty_groups)
-        analysis += f"- Average group size: {avg_size:.1f} parameters\n"
-        
-        large_groups = [name for name, params in groups.items() if len(params) > 8]
-        if large_groups:
-            analysis += f"- Consider splitting large groups: {', '.join(large_groups)}\n"
-        
-        small_groups = [name for name, params in groups.items() if 1 <= len(params) <= 2]
-        if small_groups:
-            analysis += f"- Consider merging small groups: {', '.join(small_groups)}\n"
-    
-    analysis += "- Ensure all parameters appear in exactly one group\n"
-    analysis += "- Consider workflow sequence when ordering groups\n"
-    
-    print("✅ PARAMGROUPS TOOL: analyze_parameter_groupings completed successfully")
+    analysis += "- Use these groupings to structure your paramgroups.json file.\n"
+    analysis += "- The 'Advanced' and 'System' groups are good candidates for `\"hidden\": true`.\n"
+    analysis += "- Ensure all parameters from the plan are included in the final JSON.\n"
+
+    print(f"✅ PARAMGROUPS TOOL: analyze_parameter_groupings completed successfully")
     return analysis
 
 
 @paramgroups_agent.tool
-def generate_paramgroups_structure(context: RunContext[str], groups: List[Dict[str, Any]]) -> str:
+def create_paramgroups(context: RunContext[str], tool_info: Dict[str, Any], planning_data: Dict[str, Any], error_report: str = "", attempt: int = 1) -> str:
     """
-    Generate a complete paramgroups.json structure from group definitions.
-    
-    Args:
-        groups: List of group dictionaries with 'name', 'description', 'parameters', 'hidden' fields
-    
-    Returns:
-        Complete paramgroups.json content as formatted JSON string
-    """
-    print(f"🏗️ PARAMGROUPS TOOL: Running generate_paramgroups_structure with {len(groups)} groups")
-    
-    if not groups:
-        print("❌ PARAMGROUPS TOOL: generate_paramgroups_structure failed - no groups provided")
-        return "Error: No groups provided for paramgroups generation"
-    
-    try:
-        # Validate and clean group data
-        paramgroups = []
-        
-        for i, group in enumerate(groups):
-            if not isinstance(group, dict):
-                print(f"❌ PARAMGROUPS TOOL: generate_paramgroups_structure failed - group {i} is not a dictionary")
-                return f"Error: Group {i} must be a dictionary"
-            
-            # Required fields
-            if 'name' not in group:
-                print(f"❌ PARAMGROUPS TOOL: generate_paramgroups_structure failed - group {i} missing 'name'")
-                return f"Error: Group {i} missing required field 'name'"
-            
-            if 'parameters' not in group:
-                print(f"❌ PARAMGROUPS TOOL: generate_paramgroups_structure failed - group {i} missing 'parameters'")
-                return f"Error: Group {i} missing required field 'parameters'"
-            
-            # Build clean group object
-            clean_group = {
-                "name": str(group['name']),
-                "parameters": list(group['parameters']) if isinstance(group['parameters'], list) else []
-            }
-            
-            # Optional fields
-            if 'description' in group and group['description']:
-                clean_group['description'] = str(group['description'])
-            
-            if 'hidden' in group:
-                clean_group['hidden'] = bool(group['hidden'])
-            
-            paramgroups.append(clean_group)
-        
-        # Generate formatted JSON
-        json_output = json.dumps(paramgroups, indent=4, ensure_ascii=False)
-        
-        # Add summary information
-        total_parameters = sum(len(group.get('parameters', [])) for group in paramgroups)
-        result = f"Generated paramgroups.json structure:\n"
-        result += "=" * 40 + "\n\n"
-        result += json_output + "\n\n"
-        result += f"**Summary:**\n"
-        result += f"- Groups: {len(paramgroups)}\n"
-        result += f"- Total parameters: {total_parameters}\n"
-        result += f"- Hidden groups: {sum(1 for g in paramgroups if g.get('hidden', False))}\n"
-        
-        # Validation notes
-        result += f"\n**Notes:**\n"
-        result += "- Ensure all parameters in your module are included\n"
-        result += "- Verify parameter names match exactly with module definition\n"
-        result += "- Consider group ordering for optimal user workflow\n"
-        result += "- Test UI layout with actual parameter widgets\n"
-        
-        print("✅ PARAMGROUPS TOOL: generate_paramgroups_structure completed successfully")
-        return result
-        
-    except Exception as e:
-        error_msg = f"Error generating paramgroups structure: {str(e)}"
-        print(f"❌ PARAMGROUPS TOOL: generate_paramgroups_structure failed - {error_msg}")
-        return error_msg
+    Generate a valid paramgroups.json file based on the provided tool information and planning data.
 
-
-@paramgroups_agent.tool
-def optimize_group_organization(context: RunContext[str], paramgroups_content: str, optimization_goals: List[str] = None) -> str:
-    """
-    Analyze and suggest optimizations for an existing paramgroups.json structure.
-    
     Args:
-        paramgroups_content: Current paramgroups.json content as string
-        optimization_goals: List of optimization goals ('user_experience', 'group_balance', 'workflow_order', 'complexity_separation')
-    
+        tool_info: Dictionary containing tool metadata (name, version, etc.)
+        planning_data: Dictionary containing the module plan and parameter definitions.
+        error_report: Optional string containing error feedback from previous validation attempts.
+        attempt: The current attempt number for generation.
+
     Returns:
-        Analysis with optimization suggestions and improved structure
+        A string containing the complete and valid paramgroups.json content.
     """
-    print(f"⚡ PARAMGROUPS TOOL: Running optimize_group_organization (content length: {len(paramgroups_content)} chars)")
-    
-    if optimization_goals is None:
-        optimization_goals = ['user_experience', 'group_balance']
-    
-    try:
-        # Parse existing paramgroups
-        paramgroups = json.loads(paramgroups_content)
-        
-        if not isinstance(paramgroups, list):
-            print("❌ PARAMGROUPS TOOL: optimize_group_organization failed - invalid structure")
-            return "Error: Paramgroups must be an array of group objects"
-        
-        analysis = "Paramgroups Optimization Analysis:\n"
-        analysis += "=" * 40 + "\n\n"
-        
-        # Current structure analysis
-        total_groups = len(paramgroups)
-        total_params = sum(len(group.get('parameters', [])) for group in paramgroups)
-        hidden_groups = sum(1 for group in paramgroups if group.get('hidden', False))
-        
-        analysis += f"**Current Structure:**\n"
-        analysis += f"- Groups: {total_groups}\n"
-        analysis += f"- Total parameters: {total_params}\n"
-        analysis += f"- Hidden groups: {hidden_groups}\n"
-        analysis += f"- Average group size: {total_params/total_groups:.1f} parameters\n\n"
-        
-        # Optimization analysis
-        suggestions = []
-        
-        if 'group_balance' in optimization_goals:
-            # Check group size balance
-            group_sizes = [len(group.get('parameters', [])) for group in paramgroups]
-            large_groups = [i for i, size in enumerate(group_sizes) if size > 8]
-            small_groups = [i for i, size in enumerate(group_sizes) if 1 <= size <= 2]
-            
-            if large_groups:
-                suggestions.append(f"Consider splitting large groups (groups {[i+1 for i in large_groups]} have >8 parameters)")
-            
-            if small_groups:
-                suggestions.append(f"Consider merging small groups (groups {[i+1 for i in small_groups]} have ≤2 parameters)")
-        
-        if 'workflow_order' in optimization_goals:
-            # Check workflow ordering
-            group_names = [group.get('name', '').lower() for group in paramgroups]
-            workflow_order = ['input', 'basic', 'required', 'analysis', 'processing', 'output', 'advanced', 'system']
-            
-            out_of_order = []
-            for i, name in enumerate(group_names):
-                for j, pattern in enumerate(workflow_order):
-                    if pattern in name:
-                        # Check if there are later workflow groups before this one
-                        for k in range(i):
-                            prev_name = group_names[k]
-                            for l, later_pattern in enumerate(workflow_order[j+1:], j+1):
-                                if later_pattern in prev_name:
-                                    out_of_order.append(f"'{paramgroups[i]['name']}' should come before '{paramgroups[k]['name']}'")
-                        break
-            
-            if out_of_order:
-                suggestions.append(f"Workflow ordering issues: {'; '.join(out_of_order[:3])}")
-        
-        if 'complexity_separation' in optimization_goals:
-            # Check complexity separation
-            basic_terms = ['basic', 'required', 'essential', 'input', 'output']
-            advanced_terms = ['advanced', 'expert', 'debug', 'system', 'optional']
-            
-            mixed_complexity = []
-            for group in paramgroups:
-                name = group.get('name', '').lower()
-                is_basic = any(term in name for term in basic_terms)
-                is_advanced = any(term in name for term in advanced_terms)
-                is_hidden = group.get('hidden', False)
-                
-                if is_advanced and not is_hidden:
-                    mixed_complexity.append(f"'{group['name']}' appears advanced but not hidden")
-                elif is_basic and is_hidden:
-                    mixed_complexity.append(f"'{group['name']}' appears basic but is hidden")
-            
-            if mixed_complexity:
-                suggestions.append(f"Complexity/visibility mismatches: {'; '.join(mixed_complexity[:2])}")
-        
-        if 'user_experience' in optimization_goals:
-            # Check UX factors
-            ux_issues = []
-            
-            # Check for descriptive group names
-            vague_names = [group['name'] for group in paramgroups 
-                          if group.get('name', '').lower() in ['other', 'misc', 'additional', 'more']]
-            if vague_names:
-                ux_issues.append(f"Vague group names: {', '.join(vague_names)}")
-            
-            # Check for missing descriptions
-            no_description = [group['name'] for group in paramgroups 
-                            if not group.get('description') and len(group.get('parameters', [])) > 3]
-            if no_description:
-                ux_issues.append(f"Large groups missing descriptions: {', '.join(no_description[:2])}")
-            
-            if ux_issues:
-                suggestions.append(f"UX improvements needed: {'; '.join(ux_issues)}")
-        
-        # Generate suggestions
-        if suggestions:
-            analysis += "**Optimization Suggestions:**\n"
-            for i, suggestion in enumerate(suggestions, 1):
-                analysis += f"{i}. {suggestion}\n"
-        else:
-            analysis += "**Result:** Paramgroups structure appears well-optimized!\n"
-        
-        analysis += f"\n**Optimization Goals Applied:** {', '.join(optimization_goals)}\n"
-        
-        # Quick wins
-        analysis += f"\n**Quick Wins:**\n"
-        analysis += "- Add descriptions to groups with >3 parameters\n"
-        analysis += "- Hide groups with 'advanced', 'expert', or 'debug' in the name\n"
-        analysis += "- Ensure 'Required' or 'Basic' groups come first\n"
-        analysis += "- Use descriptive names instead of 'Other' or 'Miscellaneous'\n"
-        
-        print("✅ PARAMGROUPS TOOL: optimize_group_organization completed successfully")
-        return analysis
-        
-    except json.JSONDecodeError as e:
-        error_msg = f"Invalid JSON in paramgroups content: {str(e)}"
-        print(f"❌ PARAMGROUPS TOOL: optimize_group_organization failed - {error_msg}")
-        return error_msg
-    except Exception as e:
-        error_msg = f"Error optimizing paramgroups: {str(e)}"
-        print(f"❌ PARAMGROUPS TOOL: optimize_group_organization failed - {error_msg}")
-        return error_msg
+    print(f"📋 PARAMGROUPS TOOL: Running create_paramgroups for {tool_info.get('name', 'Unknown Tool')} (attempt {attempt})")
+
+    # Extract parameters from planning data
+    parameters = planning_data.get('parameters', [])
+    if not parameters:
+        print("⚠️ PARAMGROUPS TOOL: No parameters found in planning_data. Generating empty paramgroups.")
+        return "[]"
+
+    # Use the analyze_parameter_groupings tool to get a suggested structure
+    grouping_analysis = analyze_parameter_groupings(context, parameters)
+
+    # Create a new prompt for the agent to generate the JSON based on the analysis
+    generation_prompt = f"""
+    Based on the following analysis, generate the complete paramgroups.json content for the tool '{tool_info.get('name')}'.
+    Ensure the output is a single, valid JSON array of objects, with no other text or explanation.
+
+    Parameter Grouping Analysis:
+    {grouping_analysis}
+
+    Tool Information: {tool_info}
+    Planning Data: {planning_data}
+    Previous Error Report: {error_report if error_report else "None"}
+
+    Generate the paramgroups.json content now.
+    """
+
+    # Run the agent with the new prompt to get the JSON content
+    result = context.run(generation_prompt)
+
+    print(f"✅ PARAMGROUPS TOOL: create_paramgroups completed successfully")
+    return result.output
