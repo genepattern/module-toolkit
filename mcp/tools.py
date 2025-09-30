@@ -290,60 +290,60 @@ def validate_wrapper(
         return f"Error running wrapper linter: {str(e)}\n{traceback.format_exc()}"
 
 
-@mcp.tool()
-def create_module_file(
-    module_directory: str,
-    filename: str, 
-    content: str
-) -> str:
-    """
-    Write a file to a GenePattern module directory.
-    
-    This tool creates or overwrites a file in the specified module directory with
-    the provided content. It's useful for generating module files programmatically,
-    such as creating configuration files, documentation, or code files as part of
-    module development workflows.
-    
-    Args:
-        module_directory: Path to the module directory where the file should be created.
-                         The directory must exist or the operation will fail.
-        filename: Name of the file to create or overwrite. Should include the file
-                 extension (e.g., "manifest.json", "README.md", "wrapper.py").
-        content: The text content to write to the file. Will be written as UTF-8 text.
-    
-    Returns:
-        A string indicating the success or failure of the file write operation,
-        including the full path of the created file and any error messages if
-        the operation fails.
-    """
-    try:
-        import os
-        from pathlib import Path
-        
-        # Validate module directory exists
-        module_path = Path(module_directory)
-        if not module_path.exists():
-            return f"Error: Module directory '{module_directory}' does not exist"
-        
-        if not module_path.is_dir():
-            return f"Error: '{module_directory}' is not a directory"
-        
-        # Validate filename is safe (no path traversal)
-        if os.path.sep in filename or ".." in filename:
-            return f"Error: Invalid filename '{filename}'. Filename cannot contain path separators or '..' sequences"
-        
-        # Create full file path
-        file_path = module_path / filename
-        
-        # Write the content to the file
-        try:
-            file_path.write_text(content, encoding='utf-8')
-            file_size = len(content.encode('utf-8'))
-            return f"Successfully wrote file '{filename}' to module directory '{module_directory}'\nFile path: {file_path}\nContent size: {file_size} bytes"
-        except PermissionError:
-            return f"Error: Permission denied when writing to '{file_path}'"
-        except OSError as e:
-            return f"Error: Failed to write file '{file_path}': {str(e)}"
-            
-    except Exception as e:
-        return f"Error writing module file: {str(e)}\n{traceback.format_exc()}"
+# @mcp.tool()
+# def create_module_file(
+#     module_directory: str,
+#     filename: str,
+#     content: str
+# ) -> str:
+#     """
+#     Write a file to a GenePattern module directory.
+#
+#     This tool creates or overwrites a file in the specified module directory with
+#     the provided content. It's useful for generating module files programmatically,
+#     such as creating configuration files, documentation, or code files as part of
+#     module development workflows.
+#
+#     Args:
+#         module_directory: Path to the module directory where the file should be created.
+#                          The directory must exist or the operation will fail.
+#         filename: Name of the file to create or overwrite. Should include the file
+#                  extension (e.g., "manifest.json", "README.md", "wrapper.py").
+#         content: The text content to write to the file. Will be written as UTF-8 text.
+#
+#     Returns:
+#         A string indicating the success or failure of the file write operation,
+#         including the full path of the created file and any error messages if
+#         the operation fails.
+#     """
+#     try:
+#         import os
+#         from pathlib import Path
+#
+#         # Validate module directory exists
+#         module_path = Path(module_directory)
+#         if not module_path.exists():
+#             return f"Error: Module directory '{module_directory}' does not exist"
+#
+#         if not module_path.is_dir():
+#             return f"Error: '{module_directory}' is not a directory"
+#
+#         # Validate filename is safe (no path traversal)
+#         if os.path.sep in filename or ".." in filename:
+#             return f"Error: Invalid filename '{filename}'. Filename cannot contain path separators or '..' sequences"
+#
+#         # Create full file path
+#         file_path = module_path / filename
+#
+#         # Write the content to the file
+#         try:
+#             file_path.write_text(content, encoding='utf-8')
+#             file_size = len(content.encode('utf-8'))
+#             return f"Successfully wrote file '{filename}' to module directory '{module_directory}'\nFile path: {file_path}\nContent size: {file_size} bytes"
+#         except PermissionError:
+#             return f"Error: Permission denied when writing to '{file_path}'"
+#         except OSError as e:
+#             return f"Error: Failed to write file '{file_path}': {str(e)}"
+#
+#     except Exception as e:
+#         return f"Error writing module file: {str(e)}\n{traceback.format_exc()}"
