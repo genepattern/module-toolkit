@@ -6,6 +6,7 @@ from typing import List, Dict, Any, Optional
 from pydantic_ai import Agent, RunContext
 from pydantic_ai.mcp import MCPServerStdio
 from dotenv import load_dotenv
+from agents.planner import ModulePlan
 
 
 # Load environment variables from .env file
@@ -210,13 +211,13 @@ def analyze_parameter_groupings(context: RunContext[str], parameters: List[Dict[
 
 
 @paramgroups_agent.tool
-def create_paramgroups(context: RunContext[str], tool_info: Dict[str, Any], planning_data: Dict[str, Any], error_report: str = "", attempt: int = 1) -> str:
+def create_paramgroups(context: RunContext[str], tool_info: Dict[str, Any], planning_data: ModulePlan, error_report: str = "", attempt: int = 1) -> str:
     """
     Generate a valid paramgroups.json file based on the provided tool information and planning data.
 
     Args:
         tool_info: Dictionary containing tool metadata (name, version, etc.)
-        planning_data: Dictionary containing the module plan and parameter definitions.
+        planning_data: ModulePlan object containing the module plan and parameter definitions.
         error_report: Optional string containing error feedback from previous validation attempts.
         attempt: The current attempt number for generation.
 
@@ -225,32 +226,39 @@ def create_paramgroups(context: RunContext[str], tool_info: Dict[str, Any], plan
     """
     print(f"📋 PARAMGROUPS TOOL: Running create_paramgroups for {tool_info.get('name', 'Unknown Tool')} (attempt {attempt})")
 
-    # Extract parameters from planning data
-    parameters = planning_data.get('parameters', [])
-    if not parameters:
+    # Extract parameters from planning data (ModulePlan object)
+    if not planning_data.parameters:
         print("⚠️ PARAMGROUPS TOOL: No parameters found in planning_data. Generating empty paramgroups.")
         return "[]"
+
+    # Convert ModulePlan parameters to dictionary format for analysis
+    parameters = [p.model_dump() for p in planning_data.parameters]
 
     # Use the analyze_parameter_groupings tool to get a suggested structure
     grouping_analysis = analyze_parameter_groupings(context, parameters)
 
-    # Create a new prompt for the agent to generate the JSON based on the analysis
-    generation_prompt = f"""
-    Based on the following analysis, generate the complete paramgroups.json content for the tool '{tool_info.get('name')}'.
-    Ensure the output is a single, valid JSON array of objects, with no other text or explanation.
+    # Convert planning_data to dictionary format for the prompt
+    planning_data_dict = planning_data.model_dump()
 
-    Parameter Grouping Analysis:
-    {grouping_analysis}
+    # Build the generation prompt with all the necessary information
+    generation_info = f"""
+Tool Information:
+- Name: {tool_info.get('name')}
+- Version: {tool_info.get('version', 'unknown')}
+- Description: {tool_info.get('description', 'No description provided')}
 
-    Tool Information: {tool_info}
-    Planning Data: {planning_data}
-    Previous Error Report: {error_report if error_report else "None"}
+Parameters to Group ({len(parameters)} total):
+{json.dumps(parameters, indent=2)}
 
-    Generate the paramgroups.json content now.
-    """
+Grouping Analysis:
+{grouping_analysis}
 
-    # Run the agent with the new prompt to get the JSON content
-    result = context.run(generation_prompt)
+Previous Error Report: {error_report if error_report else "None"}
+Attempt Number: {attempt}
+
+Generate a valid paramgroups.json file that groups these {len(parameters)} parameters logically.
+Each parameter must appear in exactly one group. Output ONLY valid JSON - no markdown, no explanations.
+"""
 
     print(f"✅ PARAMGROUPS TOOL: create_paramgroups completed successfully")
-    return result.output
+    return generation_info

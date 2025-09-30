@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/env python
 """
 GenePattern Module Generator
 
@@ -11,10 +11,9 @@ import sys
 import traceback
 import argparse
 from pathlib import Path
+from datetime import datetime
 from typing import Dict, List, Tuple, Any
 from dataclasses import dataclass
-from datetime import datetime
-
 from pydantic_ai import Agent
 from pydantic_ai.mcp import MCPServerStdio
 from dotenv import load_dotenv
@@ -26,11 +25,11 @@ load_dotenv()
 
 # Import agents
 from agents.researcher import researcher_agent
-from agents.planner import planner_agent
-from wrapper.agent import wrapper_agent
+from agents.planner import planner_agent, ModulePlan
 from dockerfile.agent import dockerfile_agent
-from paramgroups.agent import paramgroups_agent
+from wrapper.agent import wrapper_agent
 from manifest.agent import manifest_agent
+from paramgroups.agent import paramgroups_agent
 from documentation.agent import documentation_agent
 from gpunit.agent import gpunit_agent
 
@@ -64,17 +63,14 @@ class ModuleGenerationStatus:
     tool_name: str
     module_directory: str
     research_data: Dict[str, Any] = None
-    planning_data: Dict[str, Any] = None
+    planning_data: ModulePlan = None
     artifacts_status: Dict[str, Dict[str, Any]] = None
-    parameters: List[Dict[str, Any]] = None
     error_messages: List[str] = None
 
     def __post_init__(self):
         if self.artifacts_status is None: self.artifacts_status = {}
-        if self.parameters is None: self.parameters = []
         if self.error_messages is None: self.error_messages = []
         if self.research_data is None: self.research_data = {}
-        if self.planning_data is None: self.planning_data = {}
 
     @property
     def research_complete(self) -> bool:
@@ -84,7 +80,12 @@ class ModuleGenerationStatus:
     @property
     def planning_complete(self) -> bool:
         """Return True if planning data is present"""
-        return bool(self.planning_data)
+        return self.planning_data is not None
+
+    @property
+    def parameters(self):
+        """Return parameters from planning_data if available"""
+        return self.planning_data.parameters if self.planning_data else []
 
 
 class ModuleAgent:
@@ -187,14 +188,14 @@ class ModuleAgent:
             self.logger.print_status(f"Traceback: {traceback.format_exc()}", "DEBUG")
             return False, {'error': error_msg}
     
-    def do_planning(self, tool_info: Dict[str, str], research_data: Dict[str, Any]) -> Tuple[bool, Dict[str, Any]]:
+    def do_planning(self, tool_info: Dict[str, str], research_data: Dict[str, Any]) -> Tuple[bool, ModulePlan]:
         """Run planning phase using planner agent"""
         self.logger.print_section("Planning Phase")
         self.logger.print_status("Starting module planning and parameter analysis")
         
         try:
             prompt = f"""
-            Create a comprehensive plan for the GenePattern module for '{tool_info['name']}'.
+            Create a comprehensive structured plan for the GenePattern module for '{tool_info['name']}'.
             
             Tool Information:
             - Name: {tool_info['name']}
@@ -205,7 +206,7 @@ class ModuleAgent:
             Research Results:
             {research_data.get('research', 'No research data available')}
             
-            Please create:
+            Please create a structured ModulePlan with:
             1. Detailed parameter definitions with types and descriptions
             2. Module architecture recommendations
             3. Integration strategy for GenePattern
@@ -217,15 +218,15 @@ class ModuleAgent:
             
             result = planner_agent.run_sync(prompt)
             self.logger.print_status("Planning phase completed successfully", "SUCCESS")
-            return True, {'plan': result.output, 'parameters': []}  # Parameters would be extracted from plan
-            
+            return True, result.output
+
         except Exception as e:
             error_msg = f"Planning phase failed: {str(e)}"
             self.logger.print_status(error_msg, "ERROR")
             self.logger.print_status(f"Traceback: {traceback.format_exc()}", "DEBUG")
-            return False, {'error': error_msg}
-    
-    def artifact_creation_loop(self, artifact_name: str, tool_info: Dict[str, str], planning_data: Dict[str, Any], module_path: Path, status: ModuleGenerationStatus) -> bool:
+            return False, None
+
+    def artifact_creation_loop(self, artifact_name: str, tool_info: Dict[str, str], planning_data: ModulePlan, module_path: Path, status: ModuleGenerationStatus) -> bool:
         """Generate and validate a single artifact using its dedicated agent"""
         artifact_config = self.artifact_agents[artifact_name]
         agent = artifact_config['agent']
@@ -248,10 +249,13 @@ class ModuleAgent:
                 self.logger.print_status(f"Generating {artifact_name} (attempt {attempt}/{MAX_ARTIFACT_LOOPS})")
                 status.artifacts_status[artifact_name]['attempts'] = attempt
 
+                # Convert ModulePlan to a serializable format for the prompt
+                planning_data_dict = planning_data.model_dump()
+
                 # Call the agent's create method with proper parameters
                 prompt = f"""Use the {create_method} tool with the following parameters:
                 - tool_info: {tool_info}
-                - planning_data: {planning_data}
+                - planning_data: {planning_data_dict}
                 - error_report: {error_report}
                 - attempt: {attempt}
 
@@ -332,7 +336,7 @@ class ModuleAgent:
         except Exception as e:
             return {'success': False, 'error': f"Validation error: {str(e)}"}
 
-    def generate_all_artifacts(self, tool_info: Dict[str, str], planning_data: Dict[str, Any], module_path: Path, status: ModuleGenerationStatus, skip_artifacts: List[str] = None) -> bool:
+    def generate_all_artifacts(self, tool_info: Dict[str, str], planning_data: ModulePlan, module_path: Path, status: ModuleGenerationStatus, skip_artifacts: List[str] = None) -> bool:
         """Run artifact generation phase using artifact agents"""
         self.logger.print_section("Artifact Generation Phase")
         self.logger.print_status("Starting artifact generation")
@@ -383,9 +387,10 @@ class ModuleAgent:
         if status.parameters:
             print(f"\nParameters Identified: {len(status.parameters)}")
             for i, param in enumerate(status.parameters[:5]):  # Show first 5
-                name = param.get('name', 'unknown')
-                param_type = param.get('type', 'unknown')
-                required = 'Required' if param.get('required', False) else 'Optional'
+                # Handle structured Parameter objects
+                name = param.name
+                param_type = param.type.value if hasattr(param.type, 'value') else str(param.type)
+                required = 'Required' if param.required else 'Optional'
                 print(f"  - {name}: {param_type} ({required})")
             
             if len(status.parameters) > 5:
@@ -434,8 +439,8 @@ class ModuleAgent:
         # Phase 1: Research
         research_success, research_data = self.do_research(tool_info)
         if research_success: status.research_data = research_data
-        else: status.error_messages.append(research_data.get('error', 'Research failed'))
-        if dev_mode:
+        else:  status.error_messages.append(research_data.get('error', 'Research failed'))
+        if dev_mode and status.research_data:
             with open(module_path / "research.md", "w") as f:
                 f.write(status.research_data.get('research', ''))
 
@@ -446,17 +451,14 @@ class ModuleAgent:
         # Phase 2: Planning
         planning_success, planning_data = self.do_planning(tool_info, status.research_data)
         if planning_success: status.planning_data = planning_data
-        else: status.error_messages.append(planning_data.get('error', 'Planning failed'))
-        if dev_mode:
+        else: status.error_messages.append("Planning failed")
+        if dev_mode and status.planning_data:
             with open(module_path / "plan.md", "w") as f:
-                f.write(status.planning_data.get('plan', ''))
+                f.write(status.planning_data.plan)
 
         if not status.planning_complete:
             self.print_final_report(status)
             return 1
-
-        # Extract parameters from planning data
-        status.parameters = status.planning_data.get('parameters', [])
 
         # Phase 3: Artifact Generation
         artifacts_success = self.generate_all_artifacts(tool_info, status.planning_data, module_path, status, skip_artifacts)

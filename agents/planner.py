@@ -1,9 +1,9 @@
 import os
 import re
-from typing import List, Dict, Any
+from typing import List
 from pydantic_ai import Agent, RunContext
 from dotenv import load_dotenv
-
+from .models import ModulePlan
 
 # Load environment variables from .env file
 load_dotenv()
@@ -45,18 +45,68 @@ Your primary task is to analyze bioinformatics tools and generate detailed imple
 5. Plan comprehensive testing and validation
 6. Create detailed implementation roadmap
 
-Always provide thorough, accurate, and actionable plans with clear implementation steps.
+**Primary Output Format:**
+Your main planning function should return structured data as a ModulePlan Pydantic model containing:
+- Module metadata (name, description, author, language)
+- Input file formats and categories
+- Resource requirements (CPU cores, memory)
+- Full unstructured plan text alongside structured data
+- Wrapper script name and example command line
+- Detailed parameter specifications with types, prefixes, constraints
+
+Always prioritize comprehensive parameter analysis and accurate technical specifications for GenePattern modules.
 """
 
 # Use DEFAULT_LLM_MODEL from environment, fallback to a reasonable default
 DEFAULT_LLM_MODEL = os.getenv('DEFAULT_LLM_MODEL', 'bedrock:us.anthropic.claude-sonnet-4-20250514-v1:0')
 
-# Create agent with MCP tools access
-planner_agent = Agent(DEFAULT_LLM_MODEL, system_prompt=system_prompt)
+# Create agent with structured output support
+planner_agent = Agent(DEFAULT_LLM_MODEL, system_prompt=system_prompt, output_type=ModulePlan)
 
 
 @planner_agent.tool
-def analyze_parameter_structure(context: RunContext[str], tool_help_text: str, command_examples: str = None) -> str:
+def create_structured_plan(context: RunContext[ModulePlan], tool_name: str, research_data: str = None) -> ModulePlan:
+    """
+    Create a comprehensive structured plan for a GenePattern module based on tool analysis.
+
+    Args:
+        tool_name: Name of the bioinformatics tool to create a module for
+        research_data: Optional research data from the researcher agent
+
+    Returns:
+        ModulePlan object with all structured information about the module
+    """
+    print(f"🎯 STRUCTURED PLANNING: Starting comprehensive planning for {tool_name}")
+
+    # Use the analysis tools to gather structured information
+    if research_data:
+        parameter_analysis = analyze_parameter_structure(context, research_data, "")
+        print("✅ STRUCTURED PLANNING: Parameter analysis completed")
+
+    print("✅ STRUCTURED PLANNING: Analysis completed, creating structured plan...")
+
+    # This function will be implemented by the LLM to return structured data
+    # The LLM will analyze all available information and return a properly structured ModulePlan object
+
+    # Placeholder return - the LLM will replace this with actual structured data
+    return ModulePlan(
+        module_name=tool_name,
+        description="Comprehensive plan in progress - this will be populated by the LLM",
+        author="Unknown",
+        input_file_formats=["unknown"],
+        language="unknown",
+        categories=["unknown"],
+        cpu_cores=1,
+        memory="1GB",
+        plan="Detailed planning findings will be compiled into a comprehensive plan",
+        wrapper_script=f"{tool_name.lower()}_wrapper.py",
+        command_line=f"python {tool_name.lower()}_wrapper.py --help",
+        parameters=[]
+    )
+
+
+@planner_agent.tool
+def analyze_parameter_structure(context: RunContext[ModulePlan], tool_help_text: str, command_examples: str = None) -> str:
     """
     Analyze command-line help text and examples to extract parameter structure.
     
@@ -135,7 +185,7 @@ def analyze_parameter_structure(context: RunContext[str], tool_help_text: str, c
 
 
 @planner_agent.tool
-def create_parameter_group_schema(context: RunContext[str], parameters: List[str], group_strategy: str = "functional") -> str:
+def create_parameter_group_schema(context: RunContext[ModulePlan], parameters: List[str], group_strategy: str = "functional") -> str:
     """
     Create parameter grouping schema for GenePattern module organization.
     
@@ -229,7 +279,7 @@ def create_parameter_group_schema(context: RunContext[str], parameters: List[str
 
 
 @planner_agent.tool
-def validate_parameter_definition(context: RunContext[str], param_name: str, param_type: str, constraints: str = None, default_value: str = None) -> str:
+def validate_parameter_definition(context: RunContext[ModulePlan], param_name: str, param_type: str, constraints: str = None, default_value: str = None) -> str:
     """
     Validate a GenePattern parameter definition for correctness and completeness.
     
