@@ -22,8 +22,8 @@ from dotenv import load_dotenv
 # Load environment variables from .env file
 load_dotenv()
 
-
-# Import agents
+# Import models and agents
+from agents.models import ArtifactModel
 from agents.researcher import researcher_agent
 from agents.planner import planner_agent, ModulePlan
 from dockerfile.agent import dockerfile_agent
@@ -226,7 +226,7 @@ class ModuleAgent:
             self.logger.print_status(f"Traceback: {traceback.format_exc()}", "DEBUG")
             return False, None
 
-    def artifact_creation_loop(self, artifact_name: str, tool_info: Dict[str, str], planning_data: ModulePlan, module_path: Path, status: ModuleGenerationStatus) -> bool:
+    def artifact_creation_loop(self, artifact_name: str, tool_info: Dict[str, str], planning_data: ModulePlan, module_path: Path, status: ModuleGenerationStatus, dev_mode: bool = False) -> bool:
         """Generate and validate a single artifact using its dedicated agent"""
         artifact_config = self.artifact_agents[artifact_name]
         agent = artifact_config['agent']
@@ -260,11 +260,19 @@ class ModuleAgent:
                 - attempt: {attempt}
 
                 Generate the {artifact_name} artifact for {tool_info['name']}."""
-                result = agent.run_sync(prompt)
+                result = agent.run_sync(prompt, output_type=ArtifactModel)
+                artifact_model = result.output
 
-                # Write content to file
+                # Write the code to the main artifact file
                 with open(file_path, 'w') as f:
-                    f.write(result.output)
+                    f.write(artifact_model.code)
+
+                # Write the report file if dev mode is enabled
+                if dev_mode:
+                    report_path = module_path / f"report-{artifact_name}.md"
+                    with open(report_path, 'w') as f:
+                        f.write(artifact_model.report)
+                    self.logger.print_status(f"Generated {artifact_name} report: {report_path.name}")
 
                 status.artifacts_status[artifact_name]['generated'] = True
                 self.logger.print_status(f"Generated {filename}")
@@ -316,15 +324,16 @@ class ModuleAgent:
             # Look for explicit PASS/FAIL indicators from the linter
             output_lower = output.lower()
 
-            # Check for explicit failure indicators
+            # Check for explicit failure indicators first
             if any(indicator in output_lower for indicator in [
                 "fail:", "failed", "error:", "invalid json", "validation failed"
             ]):
                 return {'success': False, 'error': output}
 
-            # Check for explicit success indicators
+            # Check for explicit success indicators (expanded to catch more patterns)
             elif any(indicator in output_lower for indicator in [
-                "pass:", "passed all validation", "validation passed"
+                "pass:", "passed", "validation passed", "has passed", "**passed**",
+                "successfully", "validation successful", "all checks passed"
             ]):
                 return {'success': True, 'result': output}
 
@@ -336,7 +345,7 @@ class ModuleAgent:
         except Exception as e:
             return {'success': False, 'error': f"Validation error: {str(e)}"}
 
-    def generate_all_artifacts(self, tool_info: Dict[str, str], planning_data: ModulePlan, module_path: Path, status: ModuleGenerationStatus, skip_artifacts: List[str] = None) -> bool:
+    def generate_all_artifacts(self, tool_info: Dict[str, str], planning_data: ModulePlan, module_path: Path, status: ModuleGenerationStatus, skip_artifacts: List[str] = None, dev_mode: bool = False) -> bool:
         """Run artifact generation phase using artifact agents"""
         self.logger.print_section("Artifact Generation Phase")
         self.logger.print_status("Starting artifact generation")
@@ -351,8 +360,8 @@ class ModuleAgent:
                 continue
             
             self.logger.print_status(f"Generating {artifact_name}...")
-            success = self.artifact_creation_loop(artifact_name, tool_info, planning_data, module_path, status)
-            
+            success = self.artifact_creation_loop(artifact_name, tool_info, planning_data, module_path, status, dev_mode)
+
             if not success:
                 self.logger.print_status(f"❌ Failed to generate {artifact_name} after {MAX_ARTIFACT_LOOPS} attempts")
                 all_artifacts_successful = False
@@ -461,7 +470,7 @@ class ModuleAgent:
             return 1
 
         # Phase 3: Artifact Generation
-        artifacts_success = self.generate_all_artifacts(tool_info, status.planning_data, module_path, status, skip_artifacts)
+        artifacts_success = self.generate_all_artifacts(tool_info, status.planning_data, module_path, status, skip_artifacts, dev_mode)
 
         # Final report
         self.print_final_report(status)
