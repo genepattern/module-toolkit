@@ -1,4 +1,4 @@
-from typing import List, Optional
+from typing import Any, Dict, List, Optional, Literal
 from enum import Enum
 from pydantic import BaseModel, Field
 
@@ -53,3 +53,9 @@ class ModulePlan(BaseModel):
     parameters: List[Parameter] = Field(description="List of parameters to expose")
 
 
+class ArtifactModel(BaseModel):
+    """Model representing a generated artifact result"""
+    code: str  # The generated artifact code
+    report: str  # A report on the generated artifact's implementation and use
+    status: Literal["success", "failure"]  # Status of the artifact generation
+    meta: Dict[str, Any]  # Additional metadata about the generated artifact

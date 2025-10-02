@@ -7,6 +7,7 @@ from pydantic_ai import Agent, RunContext
 from pydantic_ai.mcp import MCPServerStdio
 from dotenv import load_dotenv
 
+from agents.models import ArtifactModel
 
 # Load environment variables from .env file
 load_dotenv()
