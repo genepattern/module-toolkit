@@ -10,6 +10,7 @@ import os
 import sys
 import traceback
 import argparse
+import json
 from pathlib import Path
 from datetime import datetime
 from typing import Dict, List, Tuple, Any
@@ -87,6 +88,26 @@ class ModuleGenerationStatus:
         """Return parameters from planning_data if available"""
         return self.planning_data.parameters if self.planning_data else []
 
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert status to a JSON-serializable dictionary"""
+        data: Dict[str, Any] = {
+            'tool_name': self.tool_name,
+            'module_directory': self.module_directory,
+            'research_complete': self.research_complete,
+            'planning_complete': self.planning_complete,
+            'research_data': self.research_data,
+            'artifacts_status': self.artifacts_status,
+            'error_messages': self.error_messages,
+        }
+
+        # Serialize planning_data if present (it's a Pydantic model)
+        if self.planning_data:
+            data['planning_data'] = self.planning_data.model_dump()
+        else:
+            data['planning_data'] = {}
+
+        return data
+
 
 class ModuleAgent:
     """
@@ -150,6 +171,50 @@ class ModuleAgent:
         module_path.mkdir(parents=True, exist_ok=True)
         return module_path
     
+    def save_status(self, status: ModuleGenerationStatus, dev_mode: bool = False):
+        """Save the status to disk as status.json if in dev mode"""
+        if not dev_mode:
+            return
+
+        try:
+            status_path = Path(status.module_directory) / "status.json"
+            with open(status_path, 'w') as f:
+                json.dump(status.to_dict(), f, indent=2)
+        except Exception as e:
+            self.logger.print_status(f"Failed to save status.json: {str(e)}", "WARNING")
+
+    def load_status(self, module_directory: str) -> ModuleGenerationStatus:
+        """Load status from status.json file for resuming generation"""
+        status_path = Path(module_directory) / "status.json"
+
+        if not status_path.exists():
+            raise FileNotFoundError(f"No status.json found in {module_directory}")
+
+        try:
+            with open(status_path, 'r') as f:
+                data = json.load(f)
+
+            # Reconstruct ModulePlan from dict if present
+            planning_data = None
+            if data.get('planning_data') and data['planning_data']:
+                planning_data = ModulePlan(**data['planning_data'])
+
+            # Create status object
+            status = ModuleGenerationStatus(
+                tool_name=data['tool_name'],
+                module_directory=data['module_directory'],
+                research_data=data.get('research_data'),
+                planning_data=planning_data,
+                artifacts_status=data.get('artifacts_status', {}),
+                error_messages=data.get('error_messages', [])
+            )
+
+            self.logger.print_status(f"Loaded status from {status_path}")
+            return status
+
+        except Exception as e:
+            raise ValueError(f"Failed to load status.json: {str(e)}")
+
     def do_research(self, tool_info: Dict[str, str]) -> Tuple[bool, Dict[str, Any]]:
         """Run research phase using researcher agent"""
         self.logger.print_section("Research Phase")
@@ -226,7 +291,7 @@ class ModuleAgent:
             self.logger.print_status(f"Traceback: {traceback.format_exc()}", "DEBUG")
             return False, None
 
-    def artifact_creation_loop(self, artifact_name: str, tool_info: Dict[str, str], planning_data: ModulePlan, module_path: Path, status: ModuleGenerationStatus, dev_mode: bool = False) -> bool:
+    def artifact_creation_loop(self, artifact_name: str, tool_info: Dict[str, str], planning_data: ModulePlan, module_path: Path, status: ModuleGenerationStatus, max_loops: int = MAX_ARTIFACT_LOOPS, dev_mode: bool = False) -> bool:
         """Generate and validate a single artifact using its dedicated agent"""
         artifact_config = self.artifact_agents[artifact_name]
         agent = artifact_config['agent']
@@ -243,11 +308,13 @@ class ModuleAgent:
             'attempts': 0,
             'errors': []
         }
+        self.save_status(status, dev_mode)
 
-        for attempt in range(1, MAX_ARTIFACT_LOOPS + 1):
+        for attempt in range(1, max_loops + 1):
             try:
-                self.logger.print_status(f"Generating {artifact_name} (attempt {attempt}/{MAX_ARTIFACT_LOOPS})")
+                self.logger.print_status(f"Generating {artifact_name} (attempt {attempt}/{max_loops})")
                 status.artifacts_status[artifact_name]['attempts'] = attempt
+                self.save_status(status, dev_mode)
 
                 # Convert ModulePlan to a serializable format for the prompt
                 planning_data_dict = planning_data.model_dump()
@@ -276,6 +343,7 @@ class ModuleAgent:
 
                 status.artifacts_status[artifact_name]['generated'] = True
                 self.logger.print_status(f"Generated {filename}")
+                self.save_status(status, dev_mode)
 
                 # Validate using MCP server
                 validation_result = self.validate_artifact(str(file_path), validate_tool)
@@ -283,21 +351,24 @@ class ModuleAgent:
                 if validation_result['success']:
                     status.artifacts_status[artifact_name]['validated'] = True
                     self.logger.print_status(f"✅ Successfully generated and validated {artifact_name}")
+                    self.save_status(status, dev_mode)
                     return True
                 else:
                     error_report = f"Validation failed: {validation_result.get('error', 'Unknown validation error')}"
                     self.logger.print_status(f"❌ {error_report}")
                     status.artifacts_status[artifact_name]['errors'].append(error_report)
+                    self.save_status(status, dev_mode)
 
-                    if attempt == MAX_ARTIFACT_LOOPS:
+                    if attempt == max_loops:
                         return False
 
             except Exception as e:
                 error_report = f"Error generating {artifact_name}: {str(e)}"
                 self.logger.print_status(error_report, "ERROR")
                 status.artifacts_status[artifact_name]['errors'].append(error_report)
+                self.save_status(status, dev_mode)
 
-                if attempt == MAX_ARTIFACT_LOOPS:
+                if attempt == max_loops:
                     return False
 
         return False
@@ -345,7 +416,7 @@ class ModuleAgent:
         except Exception as e:
             return {'success': False, 'error': f"Validation error: {str(e)}"}
 
-    def generate_all_artifacts(self, tool_info: Dict[str, str], planning_data: ModulePlan, module_path: Path, status: ModuleGenerationStatus, skip_artifacts: List[str] = None, dev_mode: bool = False) -> bool:
+    def generate_all_artifacts(self, tool_info: Dict[str, str], planning_data: ModulePlan, module_path: Path, status: ModuleGenerationStatus, skip_artifacts: List[str] = None, max_loops: int = MAX_ARTIFACT_LOOPS, dev_mode: bool = False) -> bool:
         """Run artifact generation phase using artifact agents"""
         self.logger.print_section("Artifact Generation Phase")
         self.logger.print_status("Starting artifact generation")
@@ -360,10 +431,10 @@ class ModuleAgent:
                 continue
             
             self.logger.print_status(f"Generating {artifact_name}...")
-            success = self.artifact_creation_loop(artifact_name, tool_info, planning_data, module_path, status, dev_mode)
+            success = self.artifact_creation_loop(artifact_name, tool_info, planning_data, module_path, status, max_loops, dev_mode)
 
             if not success:
-                self.logger.print_status(f"❌ Failed to generate {artifact_name} after {MAX_ARTIFACT_LOOPS} attempts")
+                self.logger.print_status(f"❌ Failed to generate {artifact_name} after {max_loops} attempts")
                 all_artifacts_successful = False
         
         return all_artifacts_successful
@@ -435,47 +506,91 @@ class ModuleAgent:
                 for error in status.error_messages:
                     print(f"  - {error}")
 
-    def run(self, tool_info: Dict[str, str], skip_artifacts: List[str] = None, dev_mode: bool = False) -> int:
+    def run(self, tool_info: Dict[str, str] = None, skip_artifacts: List[str] = None, dev_mode: bool = False, resume_status: ModuleGenerationStatus = None, max_loops: int = MAX_ARTIFACT_LOOPS) -> int:
         """Run the complete module generation process"""
-        self.logger.print_status(f"Generating module for: {tool_info['name']}")
 
-        # Create module directory
-        module_path = self.create_module_directory(tool_info['name'])
+        # Handle resume mode
+        if resume_status:
+            self.logger.print_status(f"Resuming module generation for: {resume_status.tool_name}")
+            status = resume_status
+            module_path = Path(status.module_directory)
 
-        # Initialize status tracking
-        status = ModuleGenerationStatus(tool_name=tool_info['name'], module_directory=str(module_path))
+            # Extract tool_info from status if not provided
+            if not tool_info:
+                tool_info = {
+                    'name': status.tool_name,
+                    'version': 'latest',
+                    'language': 'unknown',
+                    'description': '',
+                    'repository_url': '',
+                    'documentation_url': ''
+                }
+        else:
+            self.logger.print_status(f"Generating module for: {tool_info['name']}")
+            # Create module directory
+            module_path = self.create_module_directory(tool_info['name'])
+            # Initialize status tracking
+            status = ModuleGenerationStatus(tool_name=tool_info['name'], module_directory=str(module_path))
+            self.save_status(status, dev_mode)
 
         # Phase 1: Research
-        research_success, research_data = self.do_research(tool_info)
-        if research_success: status.research_data = research_data
-        else:  status.error_messages.append(research_data.get('error', 'Research failed'))
-        if dev_mode and status.research_data:
-            with open(module_path / "research.md", "w") as f:
-                f.write(status.research_data.get('research', ''))
+        if status.research_complete:
+            self.logger.print_section("Research Phase")
+            self.logger.print_status("✓ Research already complete, using existing data", "SUCCESS")
+            research_success = True
+        else:
+            research_success, research_data = self.do_research(tool_info)
+            if research_success:
+                status.research_data = research_data
+            else:
+                status.error_messages.append(research_data.get('error', 'Research failed'))
+            if dev_mode and status.research_data:
+                with open(module_path / "research.md", "w") as f:
+                    f.write(status.research_data.get('research', ''))
+            self.save_status(status, dev_mode)
 
         if not status.research_complete:
             self.print_final_report(status)
             return 1
 
         # Phase 2: Planning
-        planning_success, planning_data = self.do_planning(tool_info, status.research_data)
-        if planning_success: status.planning_data = planning_data
-        else: status.error_messages.append("Planning failed")
-        if dev_mode and status.planning_data:
-            with open(module_path / "plan.md", "w") as f:
-                f.write(status.planning_data.plan)
+        if status.planning_complete:
+            self.logger.print_section("Planning Phase")
+            self.logger.print_status("✓ Planning already complete, using existing plan", "SUCCESS")
+            planning_success = True
+        else:
+            planning_success, planning_data = self.do_planning(tool_info, status.research_data)
+            if planning_success:
+                status.planning_data = planning_data
+            else:
+                status.error_messages.append("Planning failed")
+            if dev_mode and status.planning_data:
+                with open(module_path / "plan.md", "w") as f:
+                    f.write(status.planning_data.plan)
+            self.save_status(status, dev_mode)
 
         if not status.planning_complete:
             self.print_final_report(status)
             return 1
 
         # Phase 3: Artifact Generation
-        artifacts_success = self.generate_all_artifacts(tool_info, status.planning_data, module_path, status, skip_artifacts, dev_mode)
+        # Add completed artifacts to skip list
+        if skip_artifacts is None:
+            skip_artifacts = []
+
+        # Skip artifacts that are already validated
+        for artifact_name, artifact_status in status.artifacts_status.items():
+            if artifact_status.get('validated', False):
+                if artifact_name not in skip_artifacts:
+                    skip_artifacts.append(artifact_name)
+                    self.logger.print_status(f"✓ {artifact_name} already completed, skipping")
+
+        artifacts_success = self.generate_all_artifacts(tool_info, status.planning_data, module_path, status, skip_artifacts, max_loops, dev_mode)
 
         # Final report
         self.print_final_report(status)
 
-        return 0 if (research_success and planning_success and artifacts_success) else 1
+        return 0 if (status.research_complete and status.planning_complete and artifacts_success) else 1
 
 
 class GenerationScript:
@@ -560,6 +675,12 @@ class GenerationScript:
         # Development mode
         parser.add_argument('--dev-mode', action='store_true', help='Enable development mode, saves intermediate files')
 
+        # Resume from previous run
+        parser.add_argument('--resume', type=str, metavar='MODULE_DIR', help='Resume generation from a previous run using the specified module directory')
+
+        # Max loops configuration
+        parser.add_argument('--max-loops', type=int, metavar='X', default=MAX_ARTIFACT_LOOPS, help=f'Maximum number of generation attempts per artifact (default: {MAX_ARTIFACT_LOOPS})')
+
         # Output directory
         parser.add_argument('--output-dir', default=DEFAULT_OUTPUT_DIR, type=str, help=f'Output directory for generated modules (default: {DEFAULT_OUTPUT_DIR})')
         
@@ -607,15 +728,23 @@ class GenerationScript:
             self.parse_arguments()
             self.parse_skip_artifacts()
 
-            # Get tool information from args or user input
-            if self.args.name: self.tool_info_from_args()
-            else: self.tool_info = self.get_user_input()
-
             # Initialize ModuleAgent with logger and module directory
             self.module_agent = ModuleAgent(self.logger, self.args.output_dir)
 
-            # Run the generation process
-            return self.module_agent.run(self.tool_info, self.skip_artifacts, self.args.dev_mode)
+            # Check if resuming from a previous run
+            if self.args.resume:
+                self.logger.print_status(f"Resuming from previous run in directory: {self.args.resume}")
+                status = self.module_agent.load_status(self.args.resume)
+                return self.module_agent.run(skip_artifacts=self.skip_artifacts, dev_mode=self.args.dev_mode, resume_status=status, max_loops=self.args.max_loops)
+            else:
+                # Get tool information from args or user input
+                if self.args.name:
+                    self.tool_info_from_args()
+                else:
+                    self.tool_info = self.get_user_input()
+
+                # Run the generation process
+                return self.module_agent.run(self.tool_info, self.skip_artifacts, self.args.dev_mode, max_loops=self.args.max_loops)
 
         except KeyboardInterrupt:
             self.logger.print_status("\nGeneration interrupted by user", "WARNING")
