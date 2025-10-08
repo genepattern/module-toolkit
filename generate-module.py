@@ -30,8 +30,9 @@ from agents.planner import planner_agent, ModulePlan
 from dockerfile.agent import dockerfile_agent
 from wrapper.agent import wrapper_agent
 from manifest.agent import manifest_agent
-from manifest.model import ManifestModel
+from manifest.models import ManifestModel
 from paramgroups.agent import paramgroups_agent
+from paramgroups.models import ParamgroupsModel
 from documentation.agent import documentation_agent
 from gpunit.agent import gpunit_agent
 
@@ -141,11 +142,11 @@ class ModuleAgent:
             },
             'paramgroups': {
                 'agent': paramgroups_agent,
-                'model': ArtifactModel,  # Use ArtifactModel as placeholder
+                'model': ParamgroupsModel,  # Use specific ParamgroupsModel
                 'filename': 'paramgroups.json',
                 'validate_tool': 'validate_paramgroups',
                 'create_method': 'create_paramgroups',
-                'formatter': lambda m: m.code  # Extract code from ArtifactModel
+                'formatter': lambda m: m.to_json_string()  # Use ParamgroupsModel's JSON formatter
             },
             'gpunit': {
                 'agent': gpunit_agent,
