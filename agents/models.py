@@ -56,6 +56,6 @@ class ModulePlan(BaseModel):
 class ArtifactModel(BaseModel):
     """Model representing a generated artifact result"""
     code: str  # The generated artifact code
-    report: str  # A report on the generated artifact's implementation and use
-    status: Literal["success", "failure"]  # Status of the artifact generation
+    artifact_report: str  # A report on the generated artifact's implementation and use
+    artifact_status: Literal["success", "failure"]  # Status of the artifact generation
     meta: Dict[str, Any]  # Additional metadata about the generated artifact

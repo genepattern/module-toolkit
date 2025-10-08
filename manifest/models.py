@@ -100,6 +100,10 @@ class ManifestModel(BaseModel):
     additional_properties: Optional[Dict[str, str]] = Field(default_factory=dict,
                                                             description="Any additional key-value pairs")
 
+    # Artifact generation metadata (for compatibility with ArtifactModel)
+    artifact_report: Optional[str] = Field(None, description="Report on the generated manifest's implementation and details")
+    artifact_status: Optional[str] = Field(None, description="Status of manifest generation (success/failure)")
+
     class Config:
         populate_by_name = True
 

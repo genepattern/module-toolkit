@@ -30,6 +30,7 @@ from agents.planner import planner_agent, ModulePlan
 from dockerfile.agent import dockerfile_agent
 from wrapper.agent import wrapper_agent
 from manifest.agent import manifest_agent
+from manifest.model import ManifestModel
 from paramgroups.agent import paramgroups_agent
 from documentation.agent import documentation_agent
 from gpunit.agent import gpunit_agent
@@ -120,43 +121,55 @@ class ModuleAgent:
         self.logger = logger or Logger()
         self.output_dir = output_dir
 
-        # Define artifact agents mapping
+        # Define artifact agents mapping with models and formatters
         self.artifact_agents = {
             'wrapper': {
                 'agent': wrapper_agent,
+                'model': ArtifactModel,  # Use ArtifactModel as placeholder
                 'filename': 'wrapper.py',
                 'validate_tool': 'validate_wrapper',
-                'create_method': 'create_wrapper'
+                'create_method': 'create_wrapper',
+                'formatter': lambda m: m.code  # Extract code from ArtifactModel
             },
             'manifest': {
                 'agent': manifest_agent,
+                'model': ManifestModel,  # Use specific ManifestModel
                 'filename': 'manifest',
                 'validate_tool': 'validate_manifest',
-                'create_method': 'create_manifest'
+                'create_method': 'create_manifest',
+                'formatter': lambda m: m.to_manifest_string()  # Use ManifestModel's formatter
             },
             'paramgroups': {
                 'agent': paramgroups_agent,
+                'model': ArtifactModel,  # Use ArtifactModel as placeholder
                 'filename': 'paramgroups.json',
                 'validate_tool': 'validate_paramgroups',
-                'create_method': 'create_paramgroups'
+                'create_method': 'create_paramgroups',
+                'formatter': lambda m: m.code  # Extract code from ArtifactModel
             },
             'gpunit': {
                 'agent': gpunit_agent,
+                'model': ArtifactModel,  # Use ArtifactModel as placeholder
                 'filename': 'test.yml',
                 'validate_tool': 'validate_gpunit',
-                'create_method': 'create_gpunit'
+                'create_method': 'create_gpunit',
+                'formatter': lambda m: m.code  # Extract code from ArtifactModel
             },
             'documentation': {
                 'agent': documentation_agent,
+                'model': ArtifactModel,  # Use ArtifactModel as placeholder
                 'filename': 'README.md',
                 'validate_tool': 'validate_documentation',
-                'create_method': 'create_documentation'
+                'create_method': 'create_documentation',
+                'formatter': lambda m: m.code  # Extract code from ArtifactModel
             },
             'dockerfile': {
                 'agent': dockerfile_agent,
+                'model': ArtifactModel,  # Use ArtifactModel as placeholder
                 'filename': 'Dockerfile',
                 'validate_tool': 'validate_dockerfile',
-                'create_method': 'create_dockerfile'
+                'create_method': 'create_dockerfile',
+                'formatter': lambda m: m.code  # Extract code from ArtifactModel
             }
         }
     
@@ -295,6 +308,8 @@ class ModuleAgent:
         """Generate and validate a single artifact using its dedicated agent"""
         artifact_config = self.artifact_agents[artifact_name]
         agent = artifact_config['agent']
+        model_class = artifact_config.get('model', ArtifactModel)  # Get the Pydantic model
+        formatter = artifact_config.get('formatter', lambda m: m.code)  # Get formatter function
         filename = artifact_config['filename']
         validate_tool = artifact_config['validate_tool']
         create_method = artifact_config['create_method']
@@ -327,19 +342,30 @@ class ModuleAgent:
                 - attempt: {attempt}
 
                 Generate the {artifact_name} artifact for {tool_info['name']}."""
-                result = agent.run_sync(prompt, output_type=ArtifactModel)
+
+                # Use the specific model type for this artifact
+                result = agent.run_sync(prompt, output_type=model_class)
                 artifact_model = result.output
 
-                # Write the code to the main artifact file
-                with open(file_path, 'w') as f:
-                    f.write(artifact_model.code)
+                # Format the artifact using the configured formatter
+                formatted_content = formatter(artifact_model)
 
-                # Write the report file if dev mode is enabled
+                # Write the formatted content to the main artifact file
+                with open(file_path, 'w') as f:
+                    f.write(formatted_content)
+
+                # Write the report file if dev mode is enabled and artifact has report
                 if dev_mode:
-                    report_path = module_path / f"report-{artifact_name}.md"
-                    with open(report_path, 'w') as f:
-                        f.write(artifact_model.report)
-                    self.logger.print_status(f"Generated {artifact_name} report: {report_path.name}")
+                    # Check if model has artifact_report (ManifestModel) or report (ArtifactModel)
+                    report_content = None
+                    if hasattr(artifact_model, 'artifact_report') and artifact_model.artifact_report:
+                        report_content = artifact_model.artifact_report
+
+                    if report_content:
+                        report_path = module_path / f"report-{artifact_name}.md"
+                        with open(report_path, 'w') as f:
+                            f.write(report_content)
+                        self.logger.print_status(f"Generated {artifact_name} report: {report_path.name}")
 
                 status.artifacts_status[artifact_name]['generated'] = True
                 self.logger.print_status(f"Generated {filename}")
