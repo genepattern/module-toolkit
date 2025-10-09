@@ -1,0 +1,33 @@
+#TestModule
+#Thu Jan 09 2025
+LSID=urn:lsid:genepattern.org:module.analysis:00001:1
+name=TestModule
+commandLine=python test.py <input.file> <output.name>
+author=Test Author
+version=1.0
+description=This is a test module
+taskType=Testing
+quality=production
+privacy=public
+cpuType=any
+os=any
+language=Python
+JVMLevel=
+job.docker.image=genepattern/test:1.0
+src.repo=https://github.com/genepattern/test
+fileFormat=txt;csv
+
+p1_name=input.file
+p1_description=Input file
+p1_optional=
+p1_TYPE=FILE
+p1_MODE=IN
+p1_type=java.io.File
+p1_fileFormat=txt;csv
+
+p2_name=output.name
+p2_description=Output name
+p2_optional=
+p2_TYPE=TEXT
+p2_type=java.lang.String
+

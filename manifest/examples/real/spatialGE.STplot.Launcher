@@ -1,0 +1,63 @@
+# spatialGE.STplot.Launcher
+# Mon, 28 Jan 2025 16:51:00 -0400
+userid=tabor
+author=Thorin Tabor;UCSD - Mesirov Lab
+version=Initial version
+taskType=javascript
+categories=spatial transcriptomics;javascript
+taskDoc=https://github.com/genepattern/spatialGE.STplot.Launcher/blob/main/docs/v1/index.md
+publicationDate=01/28/2025 16\:51
+description=Generates high-quality figures showing the expression of genes in spatial context.
+os=any
+cpuType=any
+commandLine=app.html ? <dataset> <sample.info> <gene.info> <domain.info>
+quality=preproduction
+JVMLevel=
+language=Javascript
+name=spatialGE.STplot.Launcher
+privacy=public
+src.repo=https://github.com/genepattern/spatialGE.STplot.Launcher.git
+
+p1_TYPE=FILE
+p1_prefix_when_specified=
+p1_fileFormat=rds
+p1_MODE=IN
+p1_value=
+p1_description=Spatial transcriptomics data, coming from spatialGE.Preprocessing, spatialGE.STclust or another spatialGE module.
+p1_optional=
+p1_name=dataset
+p1_default_value=
+p1_type=java.io.File
+
+p2_TYPE=FILE
+p2_prefix_when_specified=
+p2_fileFormat=json
+p2_MODE=IN
+p2_value=
+p2_description=JSON file containing spot/cell and gene statistics for each sample, coming from the spatialGE.Preprocessing module.
+p2_optional=
+p2_name=sample.info
+p2_default_value=
+p2_type=java.io.File
+
+p3_TYPE=FILE
+p3_prefix_when_specified=
+p3_fileFormat=json
+p3_MODE=IN
+p3_value=
+p3_description=JSON file containing gene names for each sample, coming from the spatialGE.Preprocessing module.
+p3_optional=
+p3_name=gene.info
+p3_default_value=
+p3_type=java.io.File
+
+p4_TYPE=FILE
+p4_prefix_when_specified=
+p4_fileFormat=json
+p4_MODE=IN
+p4_value=
+p4_description=Optionally, a JSON file containing domain/cluster statistics for each sample, coming from the spatialGE.STclust module, may be provided if using clustering data in plots.
+p4_optional=on
+p4_name=domain.info
+p4_default_value=
+p4_type=java.io.File

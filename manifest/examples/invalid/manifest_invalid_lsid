@@ -1,0 +1,6 @@
+#InvalidModule - Invalid LSID format
+#Thu Jan 09 2025
+LSID=invalid_lsid_format
+name=InvalidModule
+commandLine=python test.py
+

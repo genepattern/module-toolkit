@@ -1,0 +1,233 @@
+# Kallisto  urn:lsid:broad.mit.edu:cancer.software.genepattern.module.analysis:00383:2
+#Tue Jun 08 01:51:51 UTC 2021
+JVMLevel=
+LSID=urn\:lsid\:broad.mit.edu\:cancer.software.genepattern.module.analysis\:00383\:2
+author=Edwin F. Juarez, Thorin Tabor
+categories=rna-seq
+commandLine=/module/call_kallisto.sh <fastq.files> <transcriptome> <bias> <output.filename> <bootstrap.samples> <seed> \
+    <quantify.reads> <include.overhang> <read.direction> fl_<fragment.length> fsd_<fragment.sd> <pseudobam> <genomebam> \
+    gtf_<gtf.file> chr_<chromosome.file>
+cpuType=any
+description=Runs Kallisto to perform pseudoalignment (using a human or mouse transcriptome index) and gene-level aggregation
+fileFormat=csv
+
+job.docker.image=genepattern/kallisto\:6
+job.memory=4Gb
+language=any
+name=Kallisto
+os=any
+
+p1_MODE=IN
+p1_TYPE=FILE
+p1_default_value=
+p1_description=The fastq or fastq.gz files to be quantitated and translated into RNA seq transcript and gene counts
+p1_fileFormat=.fastq.gz;FASTQ;fastq;fastq.gz
+p1_flag=
+p1_name=fastq.files
+p1_numValues=0+
+p1_optional=
+p1_prefix=
+p1_prefix_when_specified=
+p1_type=java.io.File
+p1_value=
+
+p2_MODE=
+p2_TYPE=TEXT
+p2_default_value=Human
+p2_description=Which transcriptome to use for the pseudoalignment.
+p2_fileFormat=
+p2_flag=
+p2_name=transcriptome
+p2_numValues=0..1
+p2_optional=
+p2_prefix=
+p2_prefix_when_specified=
+p2_type=java.lang.String
+p2_value=Human\=Human (Gencode v37 -- GRCh38.p13);Mouse\=Mouse (Gencode M26 -- GRCm39)
+
+p3_MODE=
+p3_TYPE=TEXT
+p3_default_value=YES
+p3_description=Perform sequence based bias correction
+p3_fileFormat=
+p3_flag=
+p3_name=bias
+p3_numValues=0..1
+p3_optional=
+p3_prefix=
+p3_prefix_when_specified=
+p3_type=java.lang.String
+p3_value=NO\=NO;YES\=YES
+
+p4_MODE=
+p4_TYPE=TEXT
+p4_default_value=expression_data
+p4_description=The base name of the files to be created
+p4_fileFormat=
+p4_flag=
+p4_name=output.filename
+p4_numValues=0..1
+p4_optional=
+p4_prefix=
+p4_prefix_when_specified=
+p4_type=java.lang.String
+p4_value=
+
+p5_MODE=
+p5_default_value=2
+p5_description=Number of bootstrap samples
+p5_fileFormat=
+p5_flag=
+p5_name=bootstrap.samples
+p5_numValues=0..1
+p5_optional=
+p5_prefix=
+p5_prefix_when_specified=
+p5_type=java.lang.Integer
+p5_value=
+
+p6_MODE=
+p6_default_value=42
+p6_description=Seed for the bootstrap sampling
+p6_fileFormat=
+p6_flag=
+p6_name=seed
+p6_numValues=0..1
+p6_optional=
+p6_prefix=
+p6_prefix_when_specified=
+p6_type=java.lang.Integer
+p6_value=
+
+p7_MODE=
+p7_TYPE=TEXT
+p7_default_value=NO
+p7_description=Quantify single-end reads
+p7_fileFormat=
+p7_flag=
+p7_name=quantify.reads
+p7_numValues=0..1
+p7_optional=
+p7_prefix=
+p7_prefix_when_specified=
+p7_type=java.lang.String
+p7_value=NO\=NO;YES\=YES
+
+p8_MODE=
+p8_TYPE=TEXT
+p8_default_value=NO
+p8_description=Include reads where unobserved rest of fragment is predicted to lie outside a transcript
+p8_fileFormat=
+p8_flag=
+p8_name=include.overhang
+p8_numValues=0..1
+p8_optional=
+p8_prefix=
+p8_prefix_when_specified=
+p8_type=java.lang.String
+p8_value=NO\=NO;YES\=YES
+
+p9_MODE=
+p9_TYPE=TEXT
+p9_default_value=not set
+p9_description=For strand specific reads, first read forward, first read reverse or unspecified
+p9_fileFormat=
+p9_flag=
+p9_name=read.direction
+p9_numValues=0..1
+p9_optional=
+p9_prefix=
+p9_prefix_when_specified=
+p9_type=java.lang.String
+p9_value=notset\=not set;forward\=first read forward;reverse\=first read reverse
+
+p10_MODE=
+p10_default_value=
+p10_description=Estimated average fragment length (float value)
+p10_fileFormat=
+p10_flag=
+p10_name=fragment.length
+p10_numValues=0..1
+p10_optional=on
+p10_prefix=
+p10_prefix_when_specified=
+p10_type=java.lang.Float
+p10_value=
+
+p11_MODE=
+p11_default_value=
+p11_description=Estimated standard deviation of fragment length; values are estimated with paired end data, but are required when using single-end reads (float value)
+p11_fileFormat=
+p11_flag=
+p11_name=fragment.sd
+p11_numValues=0..1
+p11_optional=on
+p11_prefix=
+p11_prefix_when_specified=
+p11_type=java.lang.Float
+p11_value=
+
+p12_MODE=
+p12_TYPE=TEXT
+p12_default_value=NO
+p12_description=Save pseudoalignments to transcriptome to a BAM file
+p12_fileFormat=
+p12_flag=
+p12_name=pseudobam
+p12_numValues=0..1
+p12_optional=
+p12_prefix=
+p12_prefix_when_specified=
+p12_type=java.lang.String
+p12_value=NO\=NO;YES\=YES
+
+p13_MODE=
+p13_TYPE=TEXT
+p13_default_value=NO
+p13_description=Project pseudoalignments to genome sorted BAM file
+p13_fileFormat=
+p13_flag=
+p13_name=genomebam
+p13_numValues=0..1
+p13_optional=
+p13_prefix=
+p13_prefix_when_specified=
+p13_type=java.lang.String
+p13_value=NO\=NO;YES\=YES
+
+p14_MODE=IN
+p14_TYPE=FILE
+p14_default_value=
+p14_description=GTF file for transcriptome information, required for projecting pseudoalignments to genome sorted BAM file
+p14_fileFormat=gtf
+p14_flag=
+p14_name=gtf.file
+p14_numValues=0..1
+p14_optional=on
+p14_prefix=
+p14_prefix_when_specified=
+p14_type=java.io.File
+p14_value=
+
+p15_MODE=IN
+p15_TYPE=FILE
+p15_default_value=
+p15_description=Tab separated file with chromosome names and lengths, optional for projecting pseudoalignments to genome sorted BAM file, but recommended
+p15_fileFormat=tsv;csv
+p15_flag=
+p15_name=chromosome.file
+p15_numValues=0..1
+p15_optional=on
+p15_prefix=
+p15_prefix_when_specified=
+p15_type=java.io.File
+p15_value=
+
+privacy=public
+publicationDate=09/13/2019 19\:05
+quality=production
+src.repo=https://github.com/genepattern/Kallisto/releases/tag/v2
+taskDoc=doc.html
+taskType=rna-seq
+userid=edjuaro
+version=Exposing all Kallisto parameters

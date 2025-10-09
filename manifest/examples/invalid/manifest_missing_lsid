@@ -1,0 +1,5 @@
+#InvalidModule - Missing required keys
+#Thu Jan 09 2025
+name=InvalidModule
+commandLine=python test.py
+

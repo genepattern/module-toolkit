@@ -1,0 +1,7 @@
+#InvalidModule - Duplicate keys
+#Thu Jan 09 2025
+LSID=urn:lsid:genepattern.org:module.analysis:00001:1
+name=InvalidModule
+commandLine=python test.py
+name=DuplicateName
+

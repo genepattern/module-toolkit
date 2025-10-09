@@ -1,0 +1,28 @@
+#Tue, 13 Jul 2021 16:51:00 -0400
+userid=GenePattern
+author=GenePattern
+version=Bug fix to support S3 files
+taskType=javascript
+taskDoc=doc.html
+publicationDate=07/13/2021 16\:51
+description=A configurable heat map viewer that provides users with several options for manipulating and visualizing array-based data
+os=any
+cpuType=any
+commandLine=heatmap.html ? <dataset>
+quality=preproduction
+JVMLevel=
+language=HTML,JQuery
+name=HeatMapViewer
+privacy=public
+src.repo=https://github.com/genepattern/HeatMapViewer.git
+
+p1_TYPE=FILE
+p1_prefix_when_specified=
+p1_fileFormat=res;gct;odf;Dataset
+p1_MODE=IN
+p1_value=
+p1_description=The dataset to display - .gct
+p1_optional=
+p1_name=dataset
+p1_default_value=
+p1_type=java.io.File

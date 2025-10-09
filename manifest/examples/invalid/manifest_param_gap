@@ -1,0 +1,14 @@
+#InvalidModule - Non-sequential parameters
+#Thu Jan 09 2025
+LSID=urn:lsid:genepattern.org:module.analysis:00001:1
+name=InvalidModule
+commandLine=python test.py <input.file>
+
+p1_name=input.file
+p1_description=Input file
+p1_optional=
+
+p3_name=output.file
+p3_description=Output file (p2 is missing)
+p3_optional=
+

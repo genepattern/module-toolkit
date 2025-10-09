@@ -31,7 +31,8 @@ def run_test(lines: List[str]) -> List[LintIssue]:
         List of LintIssue objects for any validation failures
     """
     issues: List[LintIssue] = []
-    
+    in_continuation = False
+
     for idx, raw_line in enumerate(lines, start=1):
         line = raw_line.rstrip("\n")
         stripped = line.strip()
@@ -39,7 +40,14 @@ def run_test(lines: List[str]) -> List[LintIssue]:
         # Skip empty lines and comments
         if stripped == "" or stripped.startswith("#") or stripped.startswith("!"):
             continue
-            
+
+        # Check if this line is a continuation of a previous line
+        if in_continuation:
+            # This is a continuation line, it doesn't need '='
+            # Check if this line also ends with a continuation character
+            in_continuation = line.rstrip().endswith("\\")
+            continue
+
         # Check for basic key=value format
         if "=" not in line:
             issues.append(LintIssue(
@@ -70,7 +78,9 @@ def run_test(lines: List[str]) -> List[LintIssue]:
                 idx,
                 line,
             ))
-    
+            continue
+
+        # Check if this line ends with a continuation character
+        in_continuation = line.rstrip().endswith("\\")
+
     return issues
-
-
