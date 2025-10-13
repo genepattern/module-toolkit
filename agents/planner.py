@@ -37,11 +37,22 @@ Your primary task is to analyze bioinformatics tools and generate detailed imple
 - Multiple value support
 - Dependencies between parameters
 
+**GenePattern Naming Conventions:**
+- **Module Names**: Must be in CamelCase (starting with a capital letter). Only alphanumeric characters 
+  and periods are allowed. Periods are used exclusively for module suites (e.g., Salmon.Indexer, Salmon.Quant).
+  Examples: Kallisto, Trimmomatic, DESeq2.Normalize
+- **Parameter Names**: Must be lowercase with words separated by periods. Only alphanumeric characters 
+  and periods are allowed. Examples: input.file, fragment.length, max.threads
+- **Version Format**: Major versions (1, 2, 3) are production releases. Minor versions (1.1, 1.2, 5.2) 
+  are beta releases.
+- **LSID Format**: urn:lsid:broad.mit.edu:cancer.software.genepattern.module.analysis:<5-digit-id>:<version>
+  Example: urn:lsid:broad.mit.edu:cancer.software.genepattern.module.analysis:00123:1
+
 **Planning Methodology:**
 1. Research the tool thoroughly using available resources
 2. Analyze command-line interface and configuration options
 3. Identify common use cases and workflows
-4. Design intuitive parameter groupings
+4. Design intuitive parameter groupings following GenePattern conventions
 5. Plan comprehensive testing and validation
 6. Create detailed implementation roadmap
 
@@ -54,7 +65,8 @@ Your main planning function should return structured data as a ModulePlan Pydant
 - Wrapper script name and example command line
 - Detailed parameter specifications with types, prefixes, constraints
 
-Always prioritize comprehensive parameter analysis and accurate technical specifications for GenePattern modules.
+Always prioritize comprehensive parameter analysis, accurate technical specifications, and strict 
+adherence to GenePattern naming conventions.
 """
 
 # Use DEFAULT_LLM_MODEL from environment, fallback to a reasonable default
@@ -377,3 +389,470 @@ def validate_parameter_definition(context: RunContext[ModulePlan], param_name: s
     
     print("✅ PLANNER TOOL: validate_parameter_definition completed successfully")
     return report
+
+
+@planner_agent.tool
+def validate_module_name(context: RunContext[ModulePlan], module_name: str) -> str:
+    """
+    Validate a GenePattern module name against naming conventions.
+
+    Args:
+        module_name: The proposed module name
+
+    Returns:
+        Validation report with pass/fail status and recommendations
+    """
+    print(f"🔍 PLANNER TOOL: Running validate_module_name for '{module_name}'")
+
+    report = f"Module Name Validation Report: {module_name}\n"
+    report += "=" * 50 + "\n\n"
+
+    issues = []
+    warnings = []
+
+    # Check if name is empty
+    if not module_name:
+        issues.append("Module name cannot be empty")
+        report += "❌ **Status: INVALID**\n\n"
+        report += "**Issues:**\n"
+        for issue in issues:
+            report += f"  - {issue}\n"
+        return report
+
+    # Check CamelCase (must start with capital letter)
+    if not module_name[0].isupper():
+        issues.append("Module name must start with a capital letter (CamelCase)")
+
+    # Check for valid characters (alphanumeric and periods only)
+    if not re.match(r'^[A-Za-z0-9.]+$', module_name):
+        issues.append("Module name may only contain alphanumeric characters and periods")
+        invalid_chars = set(re.findall(r'[^A-Za-z0-9.]', module_name))
+        if invalid_chars:
+            issues.append(f"  Invalid characters found: {', '.join(sorted(invalid_chars))}")
+
+    # Check period usage (should be for suite modules only)
+    if '.' in module_name:
+        parts = module_name.split('.')
+        if len(parts) > 2:
+            warnings.append("Module name has multiple periods - typically only one period is used for suite modules")
+
+        # Each part should follow CamelCase
+        for part in parts:
+            if part and not part[0].isupper():
+                issues.append(f"Each component of a suite module should start with capital letter: '{part}' in '{module_name}'")
+            if not part:
+                issues.append("Module name contains consecutive periods or starts/ends with a period")
+
+        if len(parts) == 2:
+            warnings.append(f"Module appears to be part of a suite: {parts[0]} suite with {parts[1]} functionality")
+
+    # Check for common issues
+    if '_' in module_name:
+        issues.append("Module name should use CamelCase, not underscores (use 'MyModule' not 'My_Module')")
+
+    if '-' in module_name:
+        issues.append("Module name should not contain hyphens (use 'MyModule' not 'My-Module')")
+
+    if module_name.islower():
+        issues.append("Module name should be in CamelCase (e.g., 'Salmon' not 'salmon')")
+
+    if module_name.isupper() and len(module_name) > 1:
+        warnings.append("Module name is all uppercase - consider using CamelCase for readability")
+
+    # Generate report
+    if not issues:
+        report += "✅ **Status: VALID**\n\n"
+        report += f"Module name '{module_name}' follows GenePattern naming conventions.\n\n"
+    else:
+        report += "❌ **Status: INVALID**\n\n"
+        report += "**Issues to Fix:**\n"
+        for issue in issues:
+            report += f"  - {issue}\n"
+        report += "\n"
+
+    if warnings:
+        report += "⚠️  **Warnings:**\n"
+        for warning in warnings:
+            report += f"  - {warning}\n"
+        report += "\n"
+
+    report += "**Convention Reference:**\n"
+    report += "  - Must start with a capital letter (CamelCase)\n"
+    report += "  - Only alphanumeric characters and periods allowed\n"
+    report += "  - Periods used exclusively for suite modules (e.g., Salmon.Indexer, Salmon.Quant)\n"
+    report += "  - Examples: Kallisto, Trimmomatic, DESeq2.Normalize\n"
+
+    print(f"✅ PLANNER TOOL: validate_module_name completed - {'VALID' if not issues else 'INVALID'}")
+    return report
+
+
+@planner_agent.tool
+def validate_parameter_name(context: RunContext[ModulePlan], param_name: str) -> str:
+    """
+    Validate a GenePattern parameter name against naming conventions.
+
+    Args:
+        param_name: The proposed parameter name
+
+    Returns:
+        Validation report with pass/fail status and recommendations
+    """
+    print(f"🔍 PLANNER TOOL: Running validate_parameter_name for '{param_name}'")
+
+    report = f"Parameter Name Validation Report: {param_name}\n"
+    report += "=" * 50 + "\n\n"
+
+    issues = []
+    warnings = []
+
+    # Check if name is empty
+    if not param_name:
+        issues.append("Parameter name cannot be empty")
+        report += "❌ **Status: INVALID**\n\n"
+        report += "**Issues:**\n"
+        for issue in issues:
+            report += f"  - {issue}\n"
+        return report
+
+    # Check for lowercase
+    if not param_name.islower() or any(c.isupper() for c in param_name):
+        # Allow exceptions for periods
+        if not all(c.islower() or c == '.' or c.isdigit() for c in param_name):
+            issues.append("Parameter name must be all lowercase")
+
+    # Check for valid characters (alphanumeric and periods only)
+    if not re.match(r'^[a-z0-9.]+$', param_name):
+        issues.append("Parameter name may only contain lowercase alphanumeric characters and periods")
+        invalid_chars = set(re.findall(r'[^a-z0-9.]', param_name))
+        if invalid_chars:
+            issues.append(f"  Invalid characters found: {', '.join(sorted(invalid_chars))}")
+
+    # Check period usage (should separate words)
+    if '.' in param_name:
+        if param_name.startswith('.') or param_name.endswith('.'):
+            issues.append("Parameter name should not start or end with a period")
+
+        if '..' in param_name:
+            issues.append("Parameter name should not contain consecutive periods")
+
+        parts = param_name.split('.')
+        for part in parts:
+            if part and not part[0].isalpha():
+                warnings.append(f"Word component '{part}' starts with a number - consider starting with a letter")
+
+    # Check for common issues
+    if '_' in param_name:
+        issues.append("Parameter name should use periods to separate words, not underscores (use 'input.file' not 'input_file')")
+
+    if '-' in param_name:
+        issues.append("Parameter name should use periods to separate words, not hyphens (use 'max.threads' not 'max-threads')")
+
+    if ' ' in param_name:
+        issues.append("Parameter name should not contain spaces (use 'input.file' not 'input file')")
+
+    # Check length
+    if len(param_name) > 50:
+        warnings.append(f"Parameter name is quite long ({len(param_name)} characters) - consider abbreviating")
+
+    if len(param_name) < 2:
+        warnings.append("Parameter name is very short - consider using a more descriptive name")
+
+    # Generate report
+    if not issues:
+        report += "✅ **Status: VALID**\n\n"
+        report += f"Parameter name '{param_name}' follows GenePattern naming conventions.\n\n"
+    else:
+        report += "❌ **Status: INVALID**\n\n"
+        report += "**Issues to Fix:**\n"
+        for issue in issues:
+            report += f"  - {issue}\n"
+        report += "\n"
+
+    if warnings:
+        report += "⚠️  **Warnings:**\n"
+        for warning in warnings:
+            report += f"  - {warning}\n"
+        report += "\n"
+
+    report += "**Convention Reference:**\n"
+    report += "  - Must be all lowercase\n"
+    report += "  - Only alphanumeric characters and periods allowed\n"
+    report += "  - Use periods to separate words\n"
+    report += "  - Examples: input.file, fragment.length, max.threads, output.dir\n"
+
+    print(f"✅ PLANNER TOOL: validate_parameter_name completed - {'VALID' if not issues else 'INVALID'}")
+    return report
+
+
+@planner_agent.tool
+def validate_version_format(context: RunContext[ModulePlan], version: str) -> str:
+    """
+    Validate a GenePattern module version format.
+
+    Args:
+        version: The proposed version string
+
+    Returns:
+        Validation report with version type (production/beta) and recommendations
+    """
+    print(f"🔍 PLANNER TOOL: Running validate_version_format for '{version}'")
+
+    report = f"Version Format Validation Report: {version}\n"
+    report += "=" * 50 + "\n\n"
+
+    issues = []
+    warnings = []
+    version_type = None
+
+    # Check if version is empty
+    if not version:
+        issues.append("Version cannot be empty")
+        report += "❌ **Status: INVALID**\n\n"
+        report += "**Issues:**\n"
+        for issue in issues:
+            report += f"  - {issue}\n"
+        return report
+
+    # Check version format (should be digits with optional decimal point)
+    version_pattern = r'^\d+(\.\d+)?$'
+    if not re.match(version_pattern, version):
+        issues.append(f"Version must be in format 'X' or 'X.Y' where X and Y are integers")
+        issues.append(f"  Examples: '1', '2', '1.1', '5.2'")
+    else:
+        # Determine version type
+        if '.' in version:
+            version_type = "beta"
+            parts = version.split('.')
+            major = int(parts[0])
+            minor = int(parts[1])
+            report += f"📦 **Version Type: BETA (Minor Release)**\n"
+            report += f"   Major: {major}, Minor: {minor}\n\n"
+
+            if minor == 0:
+                warnings.append("Minor version is 0 - consider using major version format (e.g., '2' instead of '2.0')")
+        else:
+            version_type = "production"
+            report += f"🚀 **Version Type: PRODUCTION (Major Release)**\n"
+            report += f"   Version: {version}\n\n"
+
+    # Additional checks
+    if version.startswith('0') and len(version) > 1 and version[1] != '.':
+        warnings.append("Version starts with leading zero (e.g., '01') - consider using '1' instead")
+
+    if '.' in version and version.count('.') > 1:
+        issues.append("Version should have at most one decimal point (e.g., '1.2' not '1.2.3')")
+
+    # Generate report
+    if not issues:
+        report += "✅ **Status: VALID**\n\n"
+        report += f"Version '{version}' follows GenePattern version format.\n\n"
+    else:
+        report += "❌ **Status: INVALID**\n\n"
+        report += "**Issues to Fix:**\n"
+        for issue in issues:
+            report += f"  - {issue}\n"
+        report += "\n"
+
+    if warnings:
+        report += "⚠️  **Warnings:**\n"
+        for warning in warnings:
+            report += f"  - {warning}\n"
+        report += "\n"
+
+    report += "**Convention Reference:**\n"
+    report += "  - Major versions (1, 2, 3, etc.) are PRODUCTION releases\n"
+    report += "  - Minor versions (1.1, 1.2, 5.2, etc.) are BETA releases\n"
+    report += "  - Format: Single integer or integer.integer\n"
+
+    print(f"✅ PLANNER TOOL: validate_version_format completed - {'VALID' if not issues else 'INVALID'}")
+    return report
+
+
+@planner_agent.tool
+def validate_lsid_format(context: RunContext[ModulePlan], lsid: str) -> str:
+    """
+    Validate a GenePattern LSID (Life Science Identifier) format.
+
+    Args:
+        lsid: The proposed LSID string
+
+    Returns:
+        Validation report with parsed components and recommendations
+    """
+    print(f"🔍 PLANNER TOOL: Running validate_lsid_format for '{lsid}'")
+
+    report = f"LSID Format Validation Report\n"
+    report += "=" * 50 + "\n\n"
+
+    issues = []
+    warnings = []
+
+    # Check if LSID is empty
+    if not lsid:
+        issues.append("LSID cannot be empty")
+        report += "❌ **Status: INVALID**\n\n"
+        report += "**Issues:**\n"
+        for issue in issues:
+            report += f"  - {issue}\n"
+        return report
+
+    # Expected format: urn:lsid:broad.mit.edu:cancer.software.genepattern.module.analysis:XXXXX:V
+    lsid_pattern = r'^urn:lsid:broad\.mit\.edu:cancer\.software\.genepattern\.module\.analysis:(\d{5}):(\d+(?:\.\d+)?)$'
+    match = re.match(lsid_pattern, lsid)
+
+    if not match:
+        issues.append("LSID does not match required format")
+        report += "❌ **Status: INVALID**\n\n"
+
+        # Provide detailed feedback on what's wrong
+        if not lsid.startswith('urn:lsid:'):
+            issues.append("  LSID must start with 'urn:lsid:'")
+
+        if 'broad.mit.edu' not in lsid:
+            issues.append("  LSID must include 'broad.mit.edu' authority")
+
+        if 'cancer.software.genepattern.module.analysis' not in lsid:
+            issues.append("  LSID must include 'cancer.software.genepattern.module.analysis' namespace")
+
+        # Check module ID format
+        parts = lsid.split(':')
+        if len(parts) >= 5:
+            module_id = parts[4] if len(parts) > 4 else ""
+            if module_id and not re.match(r'^\d{5}$', module_id):
+                issues.append(f"  Module ID must be exactly 5 digits (found: '{module_id}')")
+
+        if len(parts) >= 6:
+            version = parts[5] if len(parts) > 5 else ""
+            if version and not re.match(r'^\d+(\.\d+)?$', version):
+                issues.append(f"  Version must be in format 'X' or 'X.Y' (found: '{version}')")
+
+        report += "**Issues to Fix:**\n"
+        for issue in issues:
+            report += f"  {issue}\n"
+        report += "\n"
+    else:
+        # Parse components
+        module_id = match.group(1)
+        version = match.group(2)
+
+        report += "✅ **Status: VALID**\n\n"
+        report += f"**Parsed Components:**\n"
+        report += f"  - Authority: broad.mit.edu\n"
+        report += f"  - Namespace: cancer.software.genepattern.module.analysis\n"
+        report += f"  - Module ID: {module_id}\n"
+        report += f"  - Version: {version}\n\n"
+
+        # Determine version type
+        if '.' in version:
+            report += f"  - Version Type: Beta (Minor Release)\n"
+        else:
+            report += f"  - Version Type: Production (Major Release)\n"
+        report += "\n"
+
+        # Check for warnings
+        if module_id == "00000":
+            warnings.append("Module ID is 00000 - this is typically a placeholder. Use actual assigned ID.")
+
+        if int(module_id) > 99999:
+            issues.append("Module ID exceeds 5 digits")
+
+    if warnings:
+        report += "⚠️  **Warnings:**\n"
+        for warning in warnings:
+            report += f"  - {warning}\n"
+        report += "\n"
+
+    report += "**LSID Format Reference:**\n"
+    report += "  Format: urn:lsid:broad.mit.edu:cancer.software.genepattern.module.analysis:<5-digit-id>:<version>\n"
+    report += "  - Module ID: Exactly 5 digits (e.g., 00123, 01234)\n"
+    report += "  - Version: Integer or integer.integer (e.g., 1, 1.1, 5.2)\n"
+    report += "  Example: urn:lsid:broad.mit.edu:cancer.software.genepattern.module.analysis:00123:1\n"
+
+    print(f"✅ PLANNER TOOL: validate_lsid_format completed - {'VALID' if not issues else 'INVALID'}")
+    return report
+
+
+@planner_agent.tool
+def validate_module_plan(context: RunContext[ModulePlan], plan: ModulePlan) -> str:
+    """
+    Validate a complete ModulePlan against all GenePattern conventions.
+
+    Args:
+        plan: The ModulePlan object to validate
+
+    Returns:
+        Comprehensive validation report covering all aspects of the plan
+    """
+    print(f"🔍 PLANNER TOOL: Running validate_module_plan for '{plan.module_name}'")
+
+    report = f"Module Plan Validation Report: {plan.module_name}\n"
+    report += "=" * 60 + "\n\n"
+
+    all_issues = []
+    all_warnings = []
+
+    # Validate module name
+    module_name_result = validate_module_name(context, plan.module_name)
+    if "INVALID" in module_name_result:
+        all_issues.append("Module name validation failed")
+
+    # Validate all parameter names
+    param_issues = []
+    for param in plan.parameters:
+        param_result = validate_parameter_name(context, param.name)
+        if "INVALID" in param_result:
+            param_issues.append(param.name)
+
+    if param_issues:
+        all_issues.append(f"Invalid parameter names: {', '.join(param_issues)}")
+
+    # Check for other potential issues
+    if not plan.description or len(plan.description) < 10:
+        all_warnings.append("Module description is too short - provide detailed description")
+
+    if not plan.author or plan.author == "Unknown":
+        all_warnings.append("Module author should be specified")
+
+    if plan.cpu_cores < 1:
+        all_issues.append("CPU cores must be at least 1")
+
+    if not plan.categories or plan.categories == ["unknown"]:
+        all_warnings.append("Module categories should be specified")
+
+    if not plan.parameters:
+        all_warnings.append("Module has no parameters defined")
+
+    # Generate summary report
+    if not all_issues:
+        report += "✅ **Overall Status: VALID**\n\n"
+        report += f"Module plan '{plan.module_name}' passes all validation checks.\n\n"
+    else:
+        report += "❌ **Overall Status: ISSUES FOUND**\n\n"
+        report += "**Critical Issues:**\n"
+        for issue in all_issues:
+            report += f"  - {issue}\n"
+        report += "\n"
+
+    if all_warnings:
+        report += "⚠️  **Warnings:**\n"
+        for warning in all_warnings:
+            report += f"  - {warning}\n"
+        report += "\n"
+
+    report += "**Plan Summary:**\n"
+    report += f"  - Module Name: {plan.module_name}\n"
+    report += f"  - Parameters: {len(plan.parameters)}\n"
+    report += f"  - Language: {plan.language}\n"
+    report += f"  - CPU Cores: {plan.cpu_cores}\n"
+    report += f"  - Memory: {plan.memory}\n"
+    report += f"  - Categories: {', '.join(plan.categories)}\n\n"
+
+    report += "**Detailed Validation Results:**\n"
+    report += f"  - Module name: {'✅ Valid' if 'INVALID' not in module_name_result else '❌ Invalid'}\n"
+    report += f"  - Parameter names: {'✅ All valid' if not param_issues else f'❌ {len(param_issues)} invalid'}\n"
+    report += f"  - Description: {'✅ Present' if plan.description and len(plan.description) >= 10 else '⚠️  Needs improvement'}\n"
+    report += f"  - Author: {'✅ Specified' if plan.author and plan.author != 'Unknown' else '⚠️  Not specified'}\n"
+
+    print(f"✅ PLANNER TOOL: validate_module_plan completed - {'VALID' if not all_issues else 'ISSUES FOUND'}")
+    return report
+
