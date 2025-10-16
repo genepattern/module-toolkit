@@ -19,12 +19,11 @@ from pydantic_ai import Agent
 from pydantic_ai.mcp import MCPServerStdio
 from dotenv import load_dotenv
 
-
 # Load environment variables from .env file
 load_dotenv()
 
 # Import models and agents
-from agents.models import ArtifactModel
+from agents.models import ArtifactModel, configured_llm_model
 from agents.researcher import researcher_agent
 from agents.planner import planner_agent, ModulePlan
 from dockerfile.agent import dockerfile_agent
@@ -407,7 +406,7 @@ class ModuleAgent:
 
             # Create a temporary agent with MCP tools to run validation
             validation_agent = Agent(
-                model='bedrock:us.anthropic.claude-sonnet-4-20250514-v1:0',
+                model=configured_llm_model(),
                 toolsets=[MCPServerStdio('python', args=['mcp/server.py'], timeout=10)]
             )
 

@@ -1,7 +1,20 @@
+import os
 from typing import Any, Dict, List, Optional, Literal
 from enum import Enum
 from pydantic import BaseModel, Field
+from pydantic_ai.models.openai import OpenAIChatModel
+from pydantic_ai.providers.ollama import OllamaProvider
 
+
+def configured_llm_model():
+    DEFAULT_LLM_MODEL = os.getenv('DEFAULT_LLM_MODEL', 'ollama:qwen3:8b')
+    if DEFAULT_LLM_MODEL.startswith('ollama:'):
+        OLLAMA_BASE_URL = os.getenv('OLLAMA_BASE_URL', 'http://localhost:11434/v1')
+        OLLAMA_MODEL_NAME = DEFAULT_LLM_MODEL[7:]
+        ollama_provider = OllamaProvider(base_url=OLLAMA_BASE_URL)
+        ollama_model = OpenAIChatModel(model_name=OLLAMA_MODEL_NAME, provider=ollama_provider)
+        return ollama_model
+    else: return DEFAULT_LLM_MODEL
 
 # Pydantic models for structured planning output
 class ParameterType(str, Enum):

@@ -1,9 +1,9 @@
-import os
 import re
 from typing import List
 from pydantic_ai import Agent, RunContext
 from dotenv import load_dotenv
-from .models import ModulePlan
+from .models import ModulePlan, configured_llm_model
+
 
 # Load environment variables from .env file
 load_dotenv()
@@ -69,11 +69,8 @@ Always prioritize comprehensive parameter analysis, accurate technical specifica
 adherence to GenePattern naming conventions.
 """
 
-# Use DEFAULT_LLM_MODEL from environment, fallback to a reasonable default
-DEFAULT_LLM_MODEL = os.getenv('DEFAULT_LLM_MODEL', 'bedrock:us.anthropic.claude-sonnet-4-20250514-v1:0')
-
 # Create agent with structured output support
-planner_agent = Agent(DEFAULT_LLM_MODEL, system_prompt=system_prompt, output_type=ModulePlan)
+planner_agent = Agent(configured_llm_model(), system_prompt=system_prompt, output_type=ModulePlan)
 
 
 @planner_agent.tool

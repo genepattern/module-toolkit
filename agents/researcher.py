@@ -2,10 +2,10 @@ import os
 import re
 import json
 import requests
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any
 from pydantic_ai import Agent, RunContext
 from dotenv import load_dotenv
-
+from .models import configured_llm_model
 
 # Load environment variables from .env file
 load_dotenv()
@@ -50,11 +50,8 @@ Provide structured, detailed reports with clear sections for different aspects o
 Include references and maintain scientific rigor in all analyses.
 """
 
-# Use DEFAULT_LLM_MODEL from environment, fallback to a reasonable default
-DEFAULT_LLM_MODEL = os.getenv('DEFAULT_LLM_MODEL', 'bedrock:us.anthropic.claude-sonnet-4-20250514-v1:0')
-
 # Create agent with MCP tools access
-researcher_agent = Agent(DEFAULT_LLM_MODEL, system_prompt=system_prompt)
+researcher_agent = Agent(configured_llm_model(), system_prompt=system_prompt)
 
 @researcher_agent.tool
 def web_search(context: RunContext[str], query: str, num_results: int = 5) -> str:

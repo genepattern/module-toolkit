@@ -1,10 +1,8 @@
-import os
-import sys
-from pathlib import Path
 from typing import Dict, Any
 from pydantic_ai import Agent, RunContext
 from pydantic_ai.mcp import MCPServerStdio
 from dotenv import load_dotenv
+from agents.models import configured_llm_model
 
 
 # Load environment variables from .env file
@@ -43,13 +41,10 @@ Always generate complete, working Dockerfiles that can be built and tested immed
 Provide clear comments explaining each section and any complex installation steps.
 """
 
-# Use DEFAULT_LLM_MODEL from environment, fallback to a reasonable default
-DEFAULT_LLM_MODEL = os.getenv('DEFAULT_LLM_MODEL', 'bedrock:us.anthropic.claude-sonnet-4-20250514-v1:0')
-
 mcp_tools = MCPServerStdio('python', args=['mcp/server.py'], timeout=10)
 
 # Create agent 
-dockerfile_agent = Agent(DEFAULT_LLM_MODEL, system_prompt=system_prompt, toolsets=[mcp_tools])
+dockerfile_agent = Agent(configured_llm_model(), system_prompt=system_prompt, toolsets=[mcp_tools])
 
 
 @dockerfile_agent.tool
