@@ -1,7 +1,6 @@
 import re
 from typing import Dict, Any, List
 from pydantic_ai import Agent, RunContext
-from pydantic_ai.mcp import MCPServerStdio
 from dotenv import load_dotenv
 from agents.models import configured_llm_model
 
@@ -48,11 +47,8 @@ Always generate complete, valid manifest files that enable proper module
 registration and execution within the GenePattern platform.
 """
 
-mcp_tools = MCPServerStdio('python', args=['mcp/server.py'], timeout=10)
-
-
-# Create agent 
-manifest_agent = Agent(configured_llm_model(), system_prompt=system_prompt, toolsets=[mcp_tools])
+# Create agent without MCP toolsets - validation happens separately via generate-module.py
+manifest_agent = Agent(configured_llm_model(), system_prompt=system_prompt)
 
 
 @manifest_agent.tool
@@ -409,13 +405,14 @@ def optimize_command_line_template(context: RunContext[str], current_command: st
 
 
 @manifest_agent.tool
-def create_manifest(context: RunContext[str], tool_info: str = None, planning_data: str = None, attempt: int = 1) -> str:
+def create_manifest(context: RunContext[str], tool_info: Dict[str, Any] = None, planning_data: Dict[str, Any] = None, error_report: str = "", attempt: int = 1) -> str:
     """
     Generate a complete manifest file for the GenePattern module.
     
     Args:
         tool_info: Dictionary with tool information (name, version, language, description)
         planning_data: Planning phase results with parameters and context
+        error_report: Optional error feedback from previous validation attempts
         attempt: Attempt number for retry logic
     
     Returns:
@@ -423,47 +420,180 @@ def create_manifest(context: RunContext[str], tool_info: str = None, planning_da
     """
     print(f"📋 MANIFEST TOOL: Running create_manifest (attempt {attempt})")
     
-    # Handle string inputs from agent calls
+    # Handle string inputs from agent calls and parse planning_data
     import re
-    
+    import json
+    import ast
+
     try:
-        # Extract tool info from string representation
-        if isinstance(tool_info, str):
-            tool_name = re.search(r"'name':\s*'([^']+)'", tool_info)
-            tool_name = tool_name.group(1) if tool_name else "UnknownTool"
-            
-            tool_version = re.search(r"'version':\s*'([^']+)'", tool_info)
-            tool_version = tool_version.group(1) if tool_version else "1.0"
-            
-            tool_language = re.search(r"'language':\s*'([^']+)'", tool_info)
-            tool_language = tool_language.group(1) if tool_language else "unknown"
-            
-            tool_description = re.search(r"'description':\s*'([^']+)'", tool_info)
-            tool_description = tool_description.group(1) if tool_description else "Bioinformatics analysis tool"
+        # Parse planning_data to extract structured information
+        planning_dict = {}
+        if planning_data:
+            # Handle both dict and string inputs
+            if isinstance(planning_data, dict):
+                planning_dict = planning_data
+                print("✓ Using planning_data as dict")
+            elif isinstance(planning_data, str):
+                # Try multiple parsing strategies
+                try:
+                    planning_dict = json.loads(planning_data)
+                    print("✓ Parsed planning_data as JSON")
+                except:
+                    try:
+                        planning_dict = ast.literal_eval(planning_data)
+                        print("✓ Parsed planning_data as Python literal")
+                    except:
+                        try:
+                            # More robust quote replacement
+                            fixed = planning_data.replace("'", '"')
+                            # Handle None, True, False
+                            fixed = fixed.replace('None', 'null').replace('True', 'true').replace('False', 'false')
+                            planning_dict = json.loads(fixed)
+                            print("✓ Parsed planning_data as fixed JSON")
+                        except Exception as e:
+                            print(f"⚠️ MANIFEST TOOL: All parsing strategies failed: {str(e)[:100]}")
+                            planning_dict = {}
+
+        # Extract tool info - handle both dict and string
+        if isinstance(tool_info, dict):
+            tool_name = tool_info.get('name', 'UnknownTool')
+            tool_version = tool_info.get('version', '1.0')
+            tool_language = tool_info.get('language', 'unknown')
+            tool_description = tool_info.get('description', 'Bioinformatics analysis tool')
+        elif isinstance(tool_info, str):
+            # Try to parse as dict first
+            try:
+                if tool_info.startswith('{'):
+                    tool_info_dict = ast.literal_eval(tool_info)
+                    tool_name = tool_info_dict.get('name', 'UnknownTool')
+                    tool_version = tool_info_dict.get('version', '1.0')
+                    tool_language = tool_info_dict.get('language', 'unknown')
+                    tool_description = tool_info_dict.get('description', 'Bioinformatics analysis tool')
+                else:
+                    raise ValueError("Not a dict")
+            except:
+                # Fall back to regex
+                tool_name = re.search(r"'name':\s*'([^']+)'", tool_info)
+                tool_name = tool_name.group(1) if tool_name else "UnknownTool"
+
+                tool_version = re.search(r"'version':\s*'([^']+)'", tool_info)
+                tool_version = tool_version.group(1) if tool_version else "1.0"
+
+                tool_language = re.search(r"'language':\s*'([^']+)'", tool_info)
+                tool_language = tool_language.group(1) if tool_language else "unknown"
+
+                tool_description = re.search(r"'description':\s*'([^']+)'", tool_info)
+                tool_description = tool_description.group(1) if tool_description else "Bioinformatics analysis tool"
         else:
             tool_name = "UnknownTool"
             tool_version = "1.0"
             tool_language = "unknown"
             tool_description = "Bioinformatics analysis tool"
         
-        # Generate a basic manifest file
+        # USE PLANNING DATA - Override with planning data if available
+        if planning_dict:
+            # Use module_name from planning_data if available
+            if 'module_name' in planning_dict and planning_dict['module_name']:
+                tool_name = planning_dict['module_name']
+                print(f"✓ Using module_name from planning_data: {tool_name}")
+
+            # Use description from planning_data if available
+            if 'description' in planning_dict and planning_dict['description']:
+                tool_description = planning_dict['description']
+                print(f"✓ Using description from planning_data")
+
+            # Use author from planning_data if available
+            author = planning_dict.get('author', 'GenePattern Module Toolkit')
+            print(f"✓ Using author from planning_data: {author}")
+
+            # Use categories from planning_data if available
+            categories = planning_dict.get('categories', ['Bioinformatics', 'Analysis'])
+            if isinstance(categories, list):
+                categories_str = ';'.join(categories)
+            else:
+                categories_str = str(categories)
+            print(f"✓ Using categories from planning_data: {categories_str}")
+
+            # Use wrapper_script from planning_data if available
+            wrapper_script = planning_dict.get('wrapper_script', 'wrapper.R')
+            print(f"✓ Using wrapper_script from planning_data: {wrapper_script}")
+
+            # Use command_line from planning_dict if available
+            if 'command_line' in planning_dict and planning_dict['command_line']:
+                command_line_from_plan = planning_dict['command_line']
+                # Convert example command line to use parameter placeholders
+                # Example: "Rscript wrapper.R --geo.accession=GSE12345" -> "Rscript wrapper.R <geo.accession>"
+                command_line = command_line_from_plan
+
+                # Replace --param=value patterns with <param>
+                if 'parameters' in planning_dict and planning_dict['parameters']:
+                    for param in planning_dict['parameters']:
+                        param_name = param.get('name', '')
+                        if param_name:
+                            # Match patterns like --geo.accession=GSE12345 or --geo.accession GSE12345
+                            pattern1 = rf'--{re.escape(param_name)}=[^\s]+'
+                            pattern2 = rf'--{re.escape(param_name)}\s+[^\s-]+'
+                            command_line = re.sub(pattern1, f'<{param_name}>', command_line)
+                            command_line = re.sub(pattern2, f'<{param_name}>', command_line)
+
+                print(f"✓ Using command_line from planning_data (converted to placeholders): {command_line}")
+            else:
+                # Build command line from wrapper_script and parameters
+                command_line = f"<{wrapper_script}>"
+
+                # Add parameters to command line if available
+                if 'parameters' in planning_dict and planning_dict['parameters']:
+                    params = planning_dict['parameters']
+                    for param in params[:10]:  # Limit to avoid overly long command lines
+                        param_name = param.get('name', 'param')
+                        command_line += f" <{param_name}>"
+                    print(f"✓ Built command_line from parameters: {command_line}")
+                else:
+                    command_line = f"<{wrapper_script}> <input.file> <output.prefix>"
+                    print(f"⚠️ No parameters in planning_data, using generic command_line")
+
+            # Use cpu_cores from planning_data if available (as cpuType hint)
+            cpu_cores = planning_dict.get('cpu_cores', 1)
+            print(f"✓ Using cpu_cores from planning_data: {cpu_cores}")
+
+            # Use memory from planning_data if available
+            memory = planning_dict.get('memory', '1GB')
+            print(f"✓ Using memory from planning_data: {memory}")
+        else:
+            # Fallback values when no planning_data
+            author = "GenePattern Module Toolkit"
+            categories_str = "Bioinformatics;Analysis"
+            wrapper_script = "wrapper.R" if tool_language == 'r' else "wrapper.py"
+            command_line = f"<{wrapper_script}> <input.file> <output.prefix>"
+            cpu_cores = 1
+            memory = "1GB"
+            print(f"⚠️ No planning_data available, using fallback values")
+
+        # Add retry context if applicable
+        if attempt > 1 and error_report:
+            print(f"⚠️ Retry attempt {attempt} - previous error: {error_report[:100]}")
+
+        # Generate manifest file with planning data
         manifest_content = f"""name={tool_name}
-LSID=urn:lsid:genepattern.org:module.analysis:{tool_name.lower()}:1
+LSID=urn:lsid:genepattern.org:module.analysis:{tool_name.lower().replace(' ', '').replace('.', '')}:1
 version={tool_version}
 description={tool_description}
-author=GenePattern Module Toolkit
+author={author}
 organization=GenePattern
-categories=Bioinformatics;Analysis
-commandLine=<wrapper.py> <input.file> <output.prefix>
+categories={categories_str}
+commandLine={command_line}
 language={tool_language}
 operating.system=any
 cpu.type=any
+taskDoc=README.md
 fileFormat=
 privacy=public
 quality=development
 documentation=README.md
 license=MIT
 tags={tool_name.lower()};analysis
+job.cpuCount={cpu_cores}
+job.memory={memory}
 """
         
         print("✅ MANIFEST TOOL: create_manifest completed successfully")
@@ -471,6 +601,8 @@ tags={tool_name.lower()};analysis
         
     except Exception as e:
         print(f"❌ MANIFEST TOOL: create_manifest failed: {e}")
+        import traceback
+        print(f"Traceback: {traceback.format_exc()}")
         # Return a minimal valid manifest
         return f"""name=UnknownTool
 LSID=urn:lsid:genepattern.org:module.analysis:unknowntool:1

@@ -350,8 +350,29 @@ class ModuleAgent:
                 # Convert ModulePlan to a serializable format for the prompt
                 planning_data_dict = planning_data.model_dump()
 
-                # Call the agent's create method with proper parameters
-                prompt = f"""Use the {create_method} tool with the following parameters:
+                # Call the agent with appropriate prompt based on artifact type
+                if artifact_name == 'manifest':
+                    # For manifest, use a direct prompt that doesn't mention tool names
+                    prompt = f"""Generate a complete GenePattern module manifest for {tool_info['name']}.
+
+Tool Information:
+- Name: {tool_info['name']}
+- Version: {tool_info.get('version', '1.0')}
+- Language: {tool_info.get('language', 'unknown')}
+- Description: {tool_info.get('description', 'Bioinformatics analysis tool')}
+- Repository: {tool_info.get('repository_url', '')}
+
+Planning Data:
+{planning_data_dict}
+
+{"Previous attempt failed with error: " + error_report if error_report else ""}
+
+This is attempt {attempt} of {max_loops}.
+
+Generate a complete, valid manifest file in key=value format."""
+                else:
+                    # For other artifacts, use the tool-based prompt
+                    prompt = f"""Use the {create_method} tool with the following parameters:
                 - tool_info: {tool_info}
                 - planning_data: {planning_data_dict}
                 - error_report: {error_report}
@@ -569,7 +590,7 @@ class ModuleAgent:
                         language = 'r'
                     elif 'python' in research_text.lower() and 'pypi' in research_text.lower():
                         language = 'python'
-
+                
                 # Also check planning data if available
                 if language == 'unknown' and status.planning_data:
                     plan_text = str(status.planning_data.plan if hasattr(status.planning_data, 'plan') else '')
@@ -577,7 +598,7 @@ class ModuleAgent:
                         language = 'r'
                     elif 'python' in plan_text.lower():
                         language = 'python'
-
+                
                 tool_info = {
                     'name': status.tool_name,
                     'version': 'latest',

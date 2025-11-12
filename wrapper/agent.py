@@ -731,36 +731,73 @@ def optimize_wrapper_performance(context: RunContext[str], wrapper_content: str,
 
 
 @wrapper_agent.tool
-def create_wrapper(context: RunContext[str], tool_name: str, tool_description: str = "", wrapper_language: str = "python",
-                   parameters: List[Dict[str, Any]] = None, tool_command: str = None,
-                   required_packages: List[str] = None) -> str:
+def create_wrapper(context: RunContext[str], tool_info: Dict[str, Any], planning_data: Dict[str, Any], error_report: str = "", attempt: int = 1) -> str:
     """
-    Generate a comprehensive wrapper script for the GenePattern module using language-specific templates.
+    Generate a comprehensive wrapper script for the GenePattern module using planning data.
 
     Args:
-        tool_name: Name of the bioinformatics tool
-        tool_description: Description of what the tool does
-        wrapper_language: Programming language for the wrapper ('python', 'bash', 'r')
-        parameters: List of parameter definitions for the module
-        tool_command: Base command to execute the underlying tool
-        required_packages: List of required packages/libraries (for R wrappers)
+        tool_info: Dictionary with tool information (name, version, language, description)
+        planning_data: Planning phase results with parameters and all module specifications
+        error_report: Optional error feedback from previous validation attempts
+        attempt: Attempt number for retry logic
 
     Returns:
         Complete wrapper script content ready for validation
     """
-    print(f"🔧 WRAPPER TOOL: Running create_wrapper for {tool_name} in {wrapper_language}")
+    print(f"🔧 WRAPPER TOOL: Running create_wrapper (attempt {attempt})")
+
+    # Extract tool information
+    tool_name = tool_info.get('name', 'unknown')
+    tool_description = tool_info.get('description', '')
+    tool_language = tool_info.get('language', 'python').lower()
+
+    # USE PLANNING DATA - Extract all wrapper-related information
+    wrapper_script = planning_data.get('wrapper_script', 'wrapper.py') if planning_data else 'wrapper.py'
+    print(f"✓ Using wrapper_script from planning_data: {wrapper_script}")
+
+    # Determine wrapper language from planning data or tool language
+    # Priority: 1) planning_data language, 2) tool_info language
+    if planning_data and 'language' in planning_data:
+        wrapper_language = planning_data['language'].lower()
+        print(f"✓ Using language from planning_data: {wrapper_language}")
+    else:
+        wrapper_language = tool_language
+        print(f"✓ Using language from tool_info: {wrapper_language}")
+
+    # Extract parameters from planning_data
+    parameters = []
+    if planning_data and 'parameters' in planning_data:
+        params_raw = planning_data['parameters']
+        # Handle both list of dicts and list of Parameter objects
+        for param in params_raw:
+            if isinstance(param, dict):
+                parameters.append(param)
+            else:
+                # Convert Parameter object to dict
+                parameters.append(param if isinstance(param, dict) else {
+                    'name': param.name if hasattr(param, 'name') else 'unknown',
+                    'type': param.type.value if hasattr(param, 'type') and hasattr(param.type, 'value') else str(param.type) if hasattr(param, 'type') else 'text',
+                    'required': param.required if hasattr(param, 'required') else False,
+                    'description': param.description if hasattr(param, 'description') else '',
+                    'default': param.default_value if hasattr(param, 'default_value') else None,
+                    'prefix': param.prefix if hasattr(param, 'prefix') else '',
+                })
+        print(f"✓ Using {len(parameters)} parameters from planning_data")
+    else:
+        print(f"⚠️ No parameters in planning_data")
+
+    # Extract command_line example from planning_data to understand tool invocation
+    tool_command = tool_name.lower()
+    if planning_data and 'command_line' in planning_data:
+        cmd_line = planning_data['command_line']
+        # Try to extract the base command from command_line
+        # e.g., "python salmon_wrapper.py <input>" -> we want to know how tool is called
+        print(f"✓ Command line from planning_data: {cmd_line}")
 
     # Set defaults
-    if parameters is None:
-        parameters = []
-    if tool_command is None:
-        tool_command = tool_name.lower()
-    if required_packages is None:
-        required_packages = []
+    required_packages = []
 
-    wrapper_language = wrapper_language.lower()
-
-    # Validate language
+    # Validate wrapper language
     if wrapper_language not in ['python', 'bash', 'r']:
         print(f"⚠️  WRAPPER TOOL: Unsupported language {wrapper_language}, defaulting to Python")
         wrapper_language = 'python'
@@ -785,6 +822,15 @@ def create_wrapper(context: RunContext[str], tool_name: str, tool_description: s
         wrapper_content = _generate_bash_wrapper(template, tool_name, tool_description, parameters, tool_command)
     else:
         wrapper_content = template
+
+    # Validate wrapper script name matches planning
+    expected_extension = extension_map.get(wrapper_language, 'py')
+    if not wrapper_script.endswith(f'.{expected_extension}'):
+        print(f"⚠️  WARNING: Planning specified wrapper_script '{wrapper_script}' but generated {wrapper_language} wrapper (expected .{expected_extension})")
+
+    # Add error report context if this is a retry
+    if attempt > 1 and error_report:
+        print(f"⚠️  Retry attempt {attempt} due to: {error_report[:100]}")
 
     print(f"✅ WRAPPER TOOL: create_wrapper completed - generated {len(wrapper_content)} character {wrapper_language} wrapper")
     return wrapper_content
@@ -895,14 +941,7 @@ def _generate_r_wrapper(template: str, tool_name: str, tool_description: str,
         required = param.get('required', False)
         default = param.get('default', '')
         description = param.get('description', f'{param_name} parameter')
-
-        # Determine R type
-        if param_type in ['Integer', 'Float']:
-            r_type = 'numeric'
-        elif param_type == 'Boolean':
-            r_type = 'logical'
-        else:
-            r_type = 'character'
+        r_type = 'character' if param_type in ['Text', 'File', 'Choice'] else 'numeric'
 
         # Build option
         opt_line = f"  make_option(c('--{param_name.replace('_', '-')}'), type='{r_type}'"

@@ -142,13 +142,14 @@ def suggest_optimizations(context: RunContext[str], dockerfile_content: str) -> 
 
 
 @dockerfile_agent.tool
-def create_dockerfile(context: RunContext[str], tool_info: Dict[str, Any], planning_data: Dict[str, Any], attempt: int = 1) -> str:
+def create_dockerfile(context: RunContext[str], tool_info: Dict[str, Any], planning_data: Dict[str, Any], error_report: str = "", attempt: int = 1) -> str:
     """
     Generate a complete Dockerfile for the GenePattern module.
     
     Args:
         tool_info: Dictionary with tool information (name, version, language, description)
         planning_data: Planning phase results with parameters and context
+        error_report: Optional error feedback from previous validation attempts
         attempt: Attempt number for retry logic
     
     Returns:
@@ -160,6 +161,70 @@ def create_dockerfile(context: RunContext[str], tool_info: Dict[str, Any], plann
         tool_name = tool_info.get('name', 'unknown')
         language = tool_info.get('language', 'python').lower()
         version = tool_info.get('version', 'latest')
+
+        # USE PLANNING DATA - Extract comprehensive build information
+        cpu_cores = planning_data.get('cpu_cores', 1) if planning_data else 1
+        memory = planning_data.get('memory', '2GB') if planning_data else '2GB'
+        input_formats = planning_data.get('input_file_formats', []) if planning_data else []
+        wrapper_script = planning_data.get('wrapper_script', 'wrapper.py') if planning_data else 'wrapper.py'
+        parameters = planning_data.get('parameters', []) if planning_data else []
+
+        print(f"✓ Using cpu_cores from planning_data: {cpu_cores}")
+        print(f"✓ Using memory from planning_data: {memory}")
+        if input_formats:
+            print(f"✓ Using input_file_formats from planning_data: {input_formats}")
+        print(f"✓ Using wrapper_script from planning_data: {wrapper_script}")
+        print(f"✓ Analyzing {len(parameters)} parameters for dependency hints")
+
+        # Analyze input formats to determine required system tools
+        format_tools = set()
+        format_lower = [fmt.lower().lstrip('.') for fmt in input_formats]
+
+        # Common bioinformatics file format tools
+        format_tool_map = {
+            'bam': ['samtools'],
+            'sam': ['samtools'],
+            'cram': ['samtools'],
+            'vcf': ['bcftools', 'tabix'],
+            'bcf': ['bcftools'],
+            'bed': ['bedtools'],
+            'bigwig': ['ucsc-tools'],
+            'bw': ['ucsc-tools'],
+            'fastq': [],  # Usually no special tools needed
+            'fq': [],
+            'fasta': [],
+            'fa': [],
+            'gz': ['gzip'],
+            'bz2': ['bzip2'],
+            'zip': ['unzip'],
+        }
+
+        for fmt in format_lower:
+            if fmt in format_tool_map:
+                format_tools.update(format_tool_map[fmt])
+
+        if format_tools:
+            print(f"✓ Detected required tools from input formats: {', '.join(format_tools)}")
+
+        # Analyze parameters for additional dependency hints
+        param_tools = set()
+        for param in parameters:
+            param_name = param.get('name', '').lower()
+            param_desc = param.get('description', '').lower()
+
+            # Look for references to specific tools in parameter names/descriptions
+            if 'samtools' in param_name or 'samtools' in param_desc:
+                param_tools.add('samtools')
+            if 'bedtools' in param_name or 'bedtools' in param_desc:
+                param_tools.add('bedtools')
+            if 'vcf' in param_name or 'bcf' in param_name:
+                param_tools.add('bcftools')
+
+        if param_tools:
+            print(f"✓ Detected tools from parameter analysis: {', '.join(param_tools)}")
+
+        # Combine all detected tools
+        all_tools = format_tools | param_tools
 
         # Determine base image based on language
         if language == 'python':
@@ -175,56 +240,131 @@ def create_dockerfile(context: RunContext[str], tool_info: Dict[str, Any], plann
             base_image = 'ubuntu:22.04'
             install_cmd = 'apt-get install -y'
 
-        # Generate Dockerfile content
+        # Generate Dockerfile content with planning data
         dockerfile_content = f"""# Dockerfile for {tool_name} GenePattern Module
+# Generated from planning data
+# Resource requirements: {cpu_cores} CPU cores, {memory} memory
+# Supported input formats: {', '.join(input_formats) if input_formats else 'various'}
 FROM {base_image}
+
+# Metadata labels
+LABEL maintainer="GenePattern"
+LABEL module.name="{tool_name}"
+LABEL module.version="{version}"
+LABEL module.language="{language}"
 
 # Set working directory
 WORKDIR /module
 
-# Install system dependencies
+"""
+
+        # Install system dependencies (base + format-specific tools)
+        base_deps = ['wget', 'curl', 'git', 'ca-certificates']
+
+        # Add bioinformatics tools if needed
+        apt_tools = []
+        if 'samtools' in all_tools:
+            apt_tools.append('samtools')
+        if 'bcftools' in all_tools:
+            apt_tools.append('bcftools')
+        if 'bedtools' in all_tools:
+            apt_tools.append('bedtools')
+        if 'tabix' in all_tools:
+            apt_tools.append('tabix')
+
+        all_deps = base_deps + apt_tools
+
+        dockerfile_content += f"""# Install system dependencies
 RUN apt-get update && \\
     apt-get install -y --no-install-recommends \\
-        wget \\
-        curl \\
-        git \\
-    && apt-get clean && \\
+"""
+
+        for dep in all_deps:
+            dockerfile_content += f"        {dep} \\\n"
+
+        dockerfile_content += """    && apt-get clean && \\
     rm -rf /var/lib/apt/lists/*
 
 """
 
         # Add language-specific installation
         if language == 'python':
+            # Try to install the tool, but don't fail if it's not available
             dockerfile_content += f"""# Install Python dependencies
-RUN {install_cmd} {tool_name.lower()} || {install_cmd} numpy pandas
+# Install the tool if available via pip, otherwise install common scientific packages
+RUN {install_cmd} {tool_name.lower()} 2>/dev/null || \\
+    {install_cmd} numpy pandas scipy matplotlib seaborn scikit-learn
 
 """
         elif language == 'r':
             dockerfile_content += f"""# Install R packages
-RUN {install_cmd} "install.packages('{tool_name}', repos='http://cran.r-project.org')"
+# Install from CRAN or Bioconductor
+RUN {install_cmd} "install.packages(c('optparse', 'futile.logger'), repos='http://cran.r-project.org')" && \\
+    {install_cmd} "if (!requireNamespace('BiocManager', quietly = TRUE)) install.packages('BiocManager', repos='http://cran.r-project.org')"
+
+# Attempt to install the tool package
+RUN {install_cmd} "install.packages('{tool_name}', repos='http://cran.r-project.org')" || \\
+    {install_cmd} "BiocManager::install('{tool_name}')" || true
+
+"""
+        elif language == 'java':
+            dockerfile_content += f"""# Java-based tool
+# Tool JAR should be provided in module files
 
 """
 
-        # Add module files
-        dockerfile_content += """# Copy module files
-COPY wrapper.py /module/
+        # Determine wrapper script extension and filename
+        wrapper_filename = wrapper_script
+        if not wrapper_filename:
+            ext_map = {'python': '.py', 'r': '.R', 'bash': '.sh'}
+            wrapper_filename = f"wrapper{ext_map.get(language, '.py')}"
+
+        # Add module files with proper wrapper script name
+        dockerfile_content += f"""# Copy module files
+COPY {wrapper_filename} /module/
 COPY manifest /module/
-COPY *.json /module/
+"""
 
-# Set permissions
-RUN chmod +x /module/wrapper.py
+        # Add optional files if they might exist
+        dockerfile_content += """COPY *.json /module/ 2>/dev/null || true
+COPY README.md /module/ 2>/dev/null || true
 
-# Set entrypoint
+"""
+
+        # Set permissions based on wrapper language
+        if language in ['python', 'r', 'bash']:
+            dockerfile_content += f"""# Set execute permissions on wrapper script
+RUN chmod +x /module/{wrapper_filename}
+
+"""
+
+        # Add environment variables for resource hints
+        dockerfile_content += f"""# Environment variables for resource management
+ENV MODULE_CPU_CORES={cpu_cores}
+ENV MODULE_MEMORY={memory}
+ENV MODULE_NAME={tool_name}
+
+"""
+
+        # Set entrypoint
+        dockerfile_content += """# Set entrypoint
 CMD ["/bin/bash"]
 """
+
+        # Add retry context if applicable
+        if attempt > 1 and error_report:
+            print(f"⚠️  Retry attempt {attempt} - addressing: {error_report[:100]}")
 
         print("✅ DOCKERFILE TOOL: create_dockerfile completed successfully")
         return dockerfile_content
 
     except Exception as e:
         print(f"❌ DOCKERFILE TOOL: create_dockerfile failed: {e}")
+        import traceback
+        print(f"Traceback: {traceback.format_exc()}")
+
         # Return a minimal valid Dockerfile
-        return """# Dockerfile for GenePattern Module
+        return f"""# Dockerfile for GenePattern Module
 FROM python:3.11-slim
 
 WORKDIR /module

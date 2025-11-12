@@ -529,13 +529,14 @@ def optimize_test_coverage(context: RunContext[str], existing_tests: List[Dict[s
 
 
 @gpunit_agent.tool
-def create_gpunit(context: RunContext[str], tool_info: Dict[str, Any], planning_data: Dict[str, Any], attempt: int = 1) -> str:
+def create_gpunit(context: RunContext[str], tool_info: Dict[str, Any], planning_data: Dict[str, Any], error_report: str = "", attempt: int = 1) -> str:
     """
     Generate a comprehensive GPUnit test definition (test.yml) for the GenePattern module.
     
     Args:
         tool_info: Dictionary with tool information (name, version, language, description)
         planning_data: Planning phase results with parameters and context
+        error_report: Optional error feedback from previous validation attempts
         attempt: Attempt number for retry logic
     
     Returns:
@@ -544,35 +545,104 @@ def create_gpunit(context: RunContext[str], tool_info: Dict[str, Any], planning_
     print(f"🧪 GPUNIT TOOL: Running create_gpunit for '{tool_info.get('name', 'unknown')}' (attempt {attempt})")
     
     try:
-        # Extract parameter information from planning data for test generation
-        parameters = planning_data.get('parameters', [])
+        # USE PLANNING DATA - Extract comprehensive test information
+        parameters = planning_data.get('parameters', []) if planning_data else []
+        input_formats = planning_data.get('input_file_formats', []) if planning_data else []
+        description = planning_data.get('description', '') if planning_data else ''
+        cpu_cores = planning_data.get('cpu_cores', 1) if planning_data else 1
+        memory = planning_data.get('memory', '2GB') if planning_data else '2GB'
+        wrapper_script = planning_data.get('wrapper_script', 'wrapper.py') if planning_data else 'wrapper.py'
+
+        # Log planning data usage
+        print(f"✓ Using {len(parameters)} parameters from planning_data")
+        if input_formats:
+            print(f"✓ Using input_file_formats from planning_data: {input_formats}")
+        if description:
+            print(f"✓ Using description from planning_data for test naming")
+        print(f"✓ Using resource requirements: {cpu_cores} cores, {memory}")
+        print(f"✓ Using wrapper_script: {wrapper_script}")
 
         # Module LSID generation
         tool_name = tool_info.get('name', 'UnknownTool')
         module_lsid = f"urn:lsid:genepattern.org:module.analysis:{tool_name.lower().replace(' ', '').replace('-', '')}:1"
 
-        # Build test parameters from module parameters
+        # Determine primary file extension from input_file_formats
+        primary_extension = 'txt'  # Default
+        if input_formats:
+            # Use first format, strip leading dot if present
+            primary_extension = input_formats[0].lstrip('.')
+            print(f"✓ Using primary file extension for test data: .{primary_extension}")
+
+        # Build test parameters from module parameters with intelligent defaults
         test_params = {}
+        test_description_hints = []
+
         for param in parameters:
             param_name = param.get('name', 'unknown')
             param_type = param.get('type', 'Text')
+            param_desc = param.get('description', '')
 
-            # Generate sample values based on parameter type
+            # Generate sample values based on parameter type with format awareness
             if param_type == 'File':
-                test_params[param_name] = f"test_data/sample_input.txt"
+                # Use input_file_formats for file parameters
+                if 'input' in param_name.lower():
+                    test_params[param_name] = f"test_data/sample_input.{primary_extension}"
+                    test_description_hints.append(f"input format: {primary_extension}")
+                elif 'output' in param_name.lower():
+                    # Output files - try to infer format from parameter name
+                    if 'prefix' in param_name.lower() or 'name' in param_name.lower():
+                        test_params[param_name] = "test_output"
+                    else:
+                        test_params[param_name] = f"test_data/output.{primary_extension}"
+                elif 'index' in param_name.lower() or 'reference' in param_name.lower():
+                    test_params[param_name] = f"test_data/reference_index"
+                else:
+                    test_params[param_name] = f"test_data/sample.{primary_extension}"
+
             elif param_type == 'Choice':
                 choices = param.get('choices', ['default'])
-                test_params[param_name] = choices[0] if choices else 'default'
+                # Extract actual choice values if they're ChoiceOption objects
+                if choices and isinstance(choices[0], dict):
+                    test_params[param_name] = choices[0].get('value', 'default')
+                else:
+                    test_params[param_name] = choices[0] if choices else 'default'
+                test_description_hints.append(f"choice: {test_params[param_name]}")
+
             elif param_type == 'Integer':
-                test_params[param_name] = param.get('default_value', '10')
+                # Use cpu_cores for thread/core related parameters
+                if any(keyword in param_name.lower() for keyword in ['thread', 'core', 'cpu', 'proc']):
+                    test_params[param_name] = str(min(cpu_cores, 2))  # Use planning cores but cap for tests
+                    test_description_hints.append(f"threads: {test_params[param_name]}")
+                else:
+                    test_params[param_name] = param.get('default_value', '10')
+
             elif param_type == 'Float':
                 test_params[param_name] = param.get('default_value', '0.05')
-            else:
+
+            else:  # Text/String
                 test_params[param_name] = param.get('default_value', 'test_value')
+
+        # Generate test name from description or tool name
+        test_scenario = "Basic Functionality Test"
+        if description:
+            # Extract key terms from description for test name
+            desc_lower = description.lower()
+            if 'alignment' in desc_lower:
+                test_scenario = "Alignment Test"
+            elif 'quantif' in desc_lower:
+                test_scenario = "Quantification Test"
+            elif 'quality' in desc_lower or 'qc' in desc_lower:
+                test_scenario = "Quality Control Test"
+            elif 'expression' in desc_lower:
+                test_scenario = "Expression Analysis Test"
+            elif 'variant' in desc_lower:
+                test_scenario = "Variant Calling Test"
 
         # Generate GPUnit YAML content
         gpunit_content = f"""# GPUnit test for {tool_name}
-name: "{tool_name} - Basic Functionality Test"
+# Generated from planning data - {', '.join(test_description_hints[:3]) if test_description_hints else 'basic test'}
+# Resource requirements: {cpu_cores} CPU cores, {memory} memory
+name: "{tool_name} - {test_scenario}"
 module: {module_lsid}
 params:
 """
@@ -581,20 +651,55 @@ params:
         for param_name, param_value in test_params.items():
             gpunit_content += f"  {param_name}: \"{param_value}\"\n"
 
+        # Generate assertions based on expected outputs
+        # Try to identify output file parameters
+        output_files = []
+        for param in parameters:
+            param_name = param.get('name', 'unknown')
+            param_type = param.get('type', 'Text')
+
+            if 'output' in param_name.lower():
+                if param_type == 'File':
+                    output_files.append(test_params.get(param_name, 'output.txt'))
+                elif 'prefix' in param_name.lower():
+                    # If it's an output prefix, add common output extensions
+                    prefix = test_params.get(param_name, 'output')
+                    output_files.append(f"{prefix}.txt")
+
         # Add assertions
         gpunit_content += """
 assertions:
   diffCmd: diff <%gpunit.diffStripTrailingCR%> -q
-  files:
+"""
+
+        # Add file assertions based on detected outputs
+        if output_files:
+            gpunit_content += "  files:\n"
+            for output_file in output_files[:3]:  # Limit to first 3 to avoid overly complex tests
+                # Clean up the filename
+                filename = output_file.replace('test_data/', '')
+                gpunit_content += f"""    "{filename}":
+      diff: "expected/{filename}"
+"""
+        else:
+            # Default output assertion
+            gpunit_content += """  files:
     "output.txt":
       diff: "expected/output.txt"
 """
+
+        # Add retry context if applicable
+        if attempt > 1 and error_report:
+            print(f"⚠️  Retry attempt {attempt} - previous error: {error_report[:100]}")
 
         print("✅ GPUNIT TOOL: create_gpunit completed successfully")
         return gpunit_content
 
     except Exception as e:
         print(f"❌ GPUNIT TOOL: create_gpunit failed: {e}")
+        import traceback
+        print(f"Traceback: {traceback.format_exc()}")
+
         # Return a minimal valid GPUnit test
         return f"""# GPUnit test
 name: "{tool_info.get('name', 'UnknownTool')} - Basic Test"
