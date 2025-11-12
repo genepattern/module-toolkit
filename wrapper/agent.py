@@ -1,5 +1,6 @@
 import re
 from typing import Dict, Any, List
+from pathlib import Path
 from pydantic_ai import Agent, RunContext
 from pydantic_ai.mcp import MCPServerStdio
 from dotenv import load_dotenv
@@ -9,6 +10,9 @@ from agents.models import configured_llm_model
 # Load environment variables from .env file
 load_dotenv()
 
+# Get the wrapper templates directory
+WRAPPER_TEMPLATES_DIR = Path(__file__).parent / "templates"
+
 
 system_prompt = """
 You are an expert software architect and DevOps specialist with deep expertise in 
@@ -17,6 +21,37 @@ Your task is to create production-ready wrapper scripts that provide seamless
 integration between GenePattern's interface and underlying bioinformatics tools.
 
 CRITICAL: Your output must ALWAYS be valid code only - no markdown, no explanations, no text before or after the code.
+
+MULTI-LANGUAGE WRAPPER GENERATION:
+You MUST generate wrapper scripts in the appropriate language based on the tool being wrapped:
+
+**Python Wrappers** - Use when:
+- The underlying tool is written in Python
+- The tool requires complex parameter validation or data transformation
+- Running in containerized environments (Docker/Singularity)
+- The tool has complex file I/O or multi-step workflows
+- High complexity score (many parameters, conditional logic)
+
+**R Wrappers** - Use when:
+- The underlying tool is an R package or R-based tool
+- The tool is native to the R/Bioconductor ecosystem
+- Direct R library integration provides better performance
+- The analysis is inherently R-based (statistical modeling, visualization)
+
+**Bash Wrappers** - Use when:
+- The underlying tool is a compiled binary (C/C++/Fortran)
+- Simple command-line tool with straightforward parameters
+- The tool is shell-based or has minimal parameter complexity
+- Low overhead and fast execution is priority
+
+**Other Languages** - Consider when:
+- Java/Scala tools: Java wrapper for native integration
+- Perl tools: Perl wrapper for legacy bioinformatics tools
+- Julia tools: Julia wrapper for performance-critical scientific computing
+
+LANGUAGE SELECTION PRIORITY:
+1. Match the tool's native language when possible (R tool → R wrapper, Python tool → Python wrapper)
+2. For compiled tools, prefer Bash for simplicity unless complexity demands Python
 
 Key requirements for GenePattern wrapper scripts:
 - Create clean, maintainable code that handles parameter passing efficiently
@@ -649,6 +684,7 @@ def optimize_wrapper_performance(context: RunContext[str], wrapper_content: str,
         analysis += "- Implement proper logging with configurable levels\n"
         analysis += "- Use pathlib for cross-platform path operations\n"
         analysis += "- Add type hints for better code documentation\n"
+        analysis += "- Use f-strings for string formatting\n"
         analysis += "- Use context managers for file operations\n"
         analysis += "- Handle subprocess errors with proper exception catching\n"
     
@@ -695,116 +731,347 @@ def optimize_wrapper_performance(context: RunContext[str], wrapper_content: str,
 
 
 @wrapper_agent.tool
-def create_wrapper(context: RunContext[str], tool_info: str = None, planning_data: str = None, attempt: int = 1) -> str:
+def create_wrapper(context: RunContext[str], tool_name: str, tool_description: str = "", wrapper_language: str = "python",
+                   parameters: List[Dict[str, Any]] = None, tool_command: str = None,
+                   required_packages: List[str] = None) -> str:
     """
-    Generate a comprehensive wrapper script for the GenePattern module.
-    
+    Generate a comprehensive wrapper script for the GenePattern module using language-specific templates.
+
     Args:
-        tool_info: Dictionary with tool information (name, version, language, description)
-        planning_data: Planning phase results with parameters and context
-        attempt: Attempt number for retry logic
-    
+        tool_name: Name of the bioinformatics tool
+        tool_description: Description of what the tool does
+        wrapper_language: Programming language for the wrapper ('python', 'bash', 'r')
+        parameters: List of parameter definitions for the module
+        tool_command: Base command to execute the underlying tool
+        required_packages: List of required packages/libraries (for R wrappers)
+
     Returns:
         Complete wrapper script content ready for validation
     """
-    print(f"🔧 WRAPPER TOOL: Running create_wrapper (attempt {attempt})")
-    
-    # Handle string inputs from agent calls
-    import re
-    
+    print(f"🔧 WRAPPER TOOL: Running create_wrapper for {tool_name} in {wrapper_language}")
+
+    # Set defaults
+    if parameters is None:
+        parameters = []
+    if tool_command is None:
+        tool_command = tool_name.lower()
+    if required_packages is None:
+        required_packages = []
+
+    wrapper_language = wrapper_language.lower()
+
+    # Validate language
+    if wrapper_language not in ['python', 'bash', 'r']:
+        print(f"⚠️  WRAPPER TOOL: Unsupported language {wrapper_language}, defaulting to Python")
+        wrapper_language = 'python'
+
+    # Load the appropriate template
+    extension_map = {'python': 'py', 'r': 'R', 'bash': 'sh'}
+    template_file = WRAPPER_TEMPLATES_DIR / f"{wrapper_language}_template.{extension_map[wrapper_language]}"
+
     try:
-        # Extract tool info from string representation
-        if isinstance(tool_info, str):
-            tool_name = re.search(r"'name':\s*'([^']+)'", tool_info)
-            tool_name = tool_name.group(1) if tool_name else "UnknownTool"
-            
-            tool_language = re.search(r"'language':\s*'([^']+)'", tool_info)
-            tool_language = tool_language.group(1) if tool_language else "python"
+        with open(template_file, 'r') as f:
+            template = f.read()
+    except FileNotFoundError:
+        print(f"❌ WRAPPER TOOL: Template file not found: {template_file}")
+        return f"# Error: Template file not found for {wrapper_language}"
+
+    # Generate language-specific content based on parameters
+    if wrapper_language == 'python':
+        wrapper_content = _generate_python_wrapper(template, tool_name, tool_description, parameters, tool_command)
+    elif wrapper_language == 'r':
+        wrapper_content = _generate_r_wrapper(template, tool_name, tool_description, parameters, tool_command, required_packages)
+    elif wrapper_language == 'bash':
+        wrapper_content = _generate_bash_wrapper(template, tool_name, tool_description, parameters, tool_command)
+    else:
+        wrapper_content = template
+
+    print(f"✅ WRAPPER TOOL: create_wrapper completed - generated {len(wrapper_content)} character {wrapper_language} wrapper")
+    return wrapper_content
+
+
+def _generate_python_wrapper(template: str, tool_name: str, tool_description: str,
+                             parameters: List[Dict[str, Any]], tool_command: str) -> str:
+    """Generate Python wrapper from template."""
+
+    # Generate parameter definitions
+    param_lines = []
+    validation_lines = []
+    command_parts = [f"'{tool_command}'"]
+
+    for param in parameters:
+        param_name = param.get('name', 'unknown')
+        param_type = param.get('type', 'Text')
+        required = param.get('required', False)
+        default = param.get('default', '')
+        description = param.get('description', f'{param_name} parameter')
+
+        # Build argparse argument
+        arg_line = f"    parser.add_argument('--{param_name.replace('_', '-')}'"
+
+        if required:
+            arg_line += ", required=True"
+
+        if param_type == 'File':
+            arg_line += f", type=str, help='{description}'"
+        elif param_type == 'Integer':
+            arg_line += f", type=int"
+            if default:
+                arg_line += f", default={default}"
+            arg_line += f", help='{description}'"
+        elif param_type == 'Float':
+            arg_line += f", type=float"
+            if default:
+                arg_line += f", default={default}"
+            arg_line += f", help='{description}'"
+        elif param_type == 'Boolean':
+            arg_line += f", action='store_true', help='{description}'"
+        elif param_type == 'Choice':
+            choices = param.get('choices', [])
+            if choices:
+                arg_line += f", choices={choices}"
+            if default:
+                arg_line += f", default='{default}'"
+            arg_line += f", help='{description}'"
+        else:  # Text/String
+            if default:
+                arg_line += f", default='{default}'"
+            arg_line += f", help='{description}'"
+
+        arg_line += ")"
+        param_lines.append(arg_line)
+
+        # Generate validation for file parameters
+        if param_type == 'File' and 'input' in param_name.lower():
+            param_var = param_name.replace('-', '_')
+            validation_lines.append(f"    if args.{param_var} and not os.path.exists(args.{param_var}):")
+            validation_lines.append(f"        logging.error(f'Input file does not exist: {{args.{param_var}}}')")
+            validation_lines.append(f"        return False")
+
+        # Add to command construction
+        param_var = param_name.replace('-', '_')
+        if param_type == 'Boolean':
+            command_parts.append(f"    if args.{param_var}:")
+            command_parts.append(f"        cmd.append('--{param_name}')")
         else:
-            tool_name = "UnknownTool"
-            tool_language = "python"
-        
-        # Generate a basic Python wrapper script
-        wrapper_content = f"""#!/usr/bin/env python3
-\"\"\"
-Wrapper script for {tool_name} GenePattern module
-Generated by GenePattern Module Toolkit
-\"\"\"
+            command_parts.append(f"    if args.{param_var}:")
+            command_parts.append(f"        cmd.extend(['--{param_name}', str(args.{param_var})])")
 
-import argparse
-import sys
-import os
-import subprocess
-from pathlib import Path
+    # Build the parameters section
+    parameters_section = '\n'.join(param_lines) if param_lines else "    # No parameters defined"
 
-def main():
-    \"\"\"Main entry point for the wrapper script\"\"\"
-    parser = argparse.ArgumentParser(description='{tool_name} wrapper for GenePattern')
-    
-    # Common bioinformatics parameters
-    parser.add_argument('input_file', help='Input file for analysis')
-    parser.add_argument('output_prefix', help='Output file prefix')
-    parser.add_argument('--threads', type=int, default=1, help='Number of threads to use')
-    parser.add_argument('--memory', type=str, default='4G', help='Memory limit')
-    
-    args = parser.parse_args()
-    
-    try:
-        # Validate input file exists
-        if not os.path.exists(args.input_file):
-            print(f"Error: Input file {{args.input_file}} does not exist", file=sys.stderr)
-            sys.exit(1)
-        
-        # Create output directory if needed
-        output_dir = os.path.dirname(args.output_prefix)
-        if output_dir and not os.path.exists(output_dir):
-            os.makedirs(output_dir)
-        
-        # Construct command
-        cmd = [
-            '{tool_name.lower()}',
-            args.input_file,
-            args.output_prefix,
-            '--threads', str(args.threads)
-        ]
-        
-        print(f"Running: {{' '.join(cmd)}}")
-        
-        # Execute the tool
-        result = subprocess.run(cmd, capture_output=True, text=True)
-        
-        if result.returncode == 0:
-            print("Analysis completed successfully")
-            sys.exit(0)
+    # Build validation section
+    if validation_lines:
+        validation_section = '\n'.join(validation_lines)
+    else:
+        validation_section = "    # No specific validation required"
+
+    # Build command section
+    command_section = f"[{command_parts[0]}]\n" + '\n'.join(command_parts[1:])
+
+    # Replace placeholders in template
+    wrapper = template.replace('{TOOL_NAME}', tool_name)
+    wrapper = wrapper.replace('{TOOL_DESCRIPTION}', tool_description or f'Analysis using {tool_name}')
+    wrapper = wrapper.replace('{PARAMETERS}', parameters_section)
+    wrapper = wrapper.replace('{VALIDATION}', validation_section)
+    wrapper = wrapper.replace('{COMMAND}', command_section)
+
+    return wrapper
+
+
+def _generate_r_wrapper(template: str, tool_name: str, tool_description: str,
+                       parameters: List[Dict[str, Any]], tool_command: str,
+                       required_packages: List[str]) -> str:
+    """Generate R wrapper from template."""
+
+    # Generate option list
+    option_lines = []
+    validation_lines = []
+    execution_lines = []
+
+    for i, param in enumerate(parameters):
+        param_name = param.get('name', 'unknown')
+        param_type = param.get('type', 'Text')
+        required = param.get('required', False)
+        default = param.get('default', '')
+        description = param.get('description', f'{param_name} parameter')
+
+        # Determine R type
+        if param_type in ['Integer', 'Float']:
+            r_type = 'numeric'
+        elif param_type == 'Boolean':
+            r_type = 'logical'
         else:
-            print(f"Error: {{result.stderr}}", file=sys.stderr)
-            sys.exit(1)
-            
-    except Exception as e:
-        print(f"Unexpected error: {{e}}", file=sys.stderr)
-        sys.exit(1)
+            r_type = 'character'
 
-if __name__ == "__main__":
-    main()
-"""
-        
-        print("✅ WRAPPER TOOL: create_wrapper completed successfully")
-        return wrapper_content
-        
-    except Exception as e:
-        print(f"❌ WRAPPER TOOL: create_wrapper failed: {e}")
-        # Return a minimal wrapper
-        return """#!/usr/bin/env python3
-import sys
-import argparse
+        # Build option
+        opt_line = f"  make_option(c('--{param_name.replace('_', '-')}'), type='{r_type}'"
 
-def main():
-    parser = argparse.ArgumentParser(description='Basic wrapper')
-    parser.add_argument('input_file', help='Input file')
-    parser.add_argument('output_prefix', help='Output prefix')
-    args = parser.parse_args()
-    print(f"Processing {args.input_file} -> {args.output_prefix}")
+        if default and param_type != 'Boolean':
+            if r_type == 'character':
+                opt_line += f", default='{default}'"
+            else:
+                opt_line += f", default={default}"
+        elif param_type == 'Boolean':
+            opt_line += f", default={str(default).upper() if default else 'FALSE'}"
 
-if __name__ == "__main__":
-    main()
-"""
+        if required:
+            opt_line += ", default=NULL"
+
+        opt_line += f", help='{description}')"
+
+        if i < len(parameters) - 1:
+            opt_line += ","
+
+        option_lines.append(opt_line)
+
+        # Generate validation
+        if param_type == 'File' and 'input' in param_name.lower():
+            param_var = param_name.replace('-', '_')
+            validation_lines.append(f"  if (!is.null(opt${param_var}) && !file.exists(opt${param_var})) {{")
+            validation_lines.append(f"    cat(paste('Error: Input file does not exist:', opt${param_var}, '\\n'), file = stderr())")
+            validation_lines.append(f"    return(FALSE)")
+            validation_lines.append(f"  }}")
+
+    # Build options section
+    options_section = '\n'.join(option_lines) if option_lines else "  # No options defined"
+
+    # Build validation section
+    if validation_lines:
+        validation_section = '\n'.join(validation_lines)
+    else:
+        validation_section = "  # No specific validation required"
+
+    # Build execution section
+    execution_lines.append(f"    cmd <- c('{tool_command}')")
+    for param in parameters:
+        param_name = param.get('name', 'unknown')
+        param_var = param_name.replace('-', '_')
+        param_type = param.get('type', 'Text')
+
+        if param_type == 'Boolean':
+            execution_lines.append(f"    if (!is.null(opt${param_var}) && opt${param_var}) {{")
+            execution_lines.append(f"      cmd <- c(cmd, '--{param_name}')")
+            execution_lines.append(f"    }}")
+        else:
+            execution_lines.append(f"    if (!is.null(opt${param_var})) {{")
+            execution_lines.append(f"      cmd <- c(cmd, '--{param_name}', opt${param_var})")
+            execution_lines.append(f"    }}")
+
+    execution_lines.append(f"    ")
+    execution_lines.append(f"    result <- system2(cmd[1], args=cmd[-1], stdout=TRUE, stderr=TRUE)")
+
+    execution_section = '\n'.join(execution_lines)
+
+    # Handle required packages
+    if required_packages:
+        pkg_list = ', '.join([f'"{pkg}"' for pkg in required_packages])
+        required_packages_section = f", {pkg_list}"
+        library_loads = '\n  '.join([f"library({pkg})" for pkg in required_packages])
+    else:
+        required_packages_section = ""
+        library_loads = "# Additional packages loaded as needed"
+
+    # Replace placeholders
+    wrapper = template.replace('{TOOL_NAME}', tool_name)
+    wrapper = wrapper.replace('{TOOL_DESCRIPTION}', tool_description or f'Analysis using {tool_name}')
+    wrapper = wrapper.replace('{OPTIONS}', options_section)
+    wrapper = wrapper.replace('{VALIDATION}', validation_section)
+    wrapper = wrapper.replace('{EXECUTION}', execution_section)
+    wrapper = wrapper.replace('{REQUIRED_PACKAGES}', required_packages_section)
+    wrapper = wrapper.replace('{LIBRARY_LOADS}', library_loads)
+
+    return wrapper
+
+
+def _generate_bash_wrapper(template: str, tool_name: str, tool_description: str,
+                           parameters: List[Dict[str, Any]], tool_command: str) -> str:
+    """Generate Bash wrapper from template."""
+
+    # Generate defaults
+    default_lines = []
+    usage_lines = []
+    parse_lines = []
+    validation_lines = []
+    execution_lines = []
+
+    for param in parameters:
+        param_name = param.get('name', 'unknown')
+        param_type = param.get('type', 'Text')
+        required = param.get('required', False)
+        default = param.get('default', '')
+        description = param.get('description', f'{param_name} parameter')
+
+        param_var = param_name.upper().replace('-', '_')
+
+        # Generate default
+        if param_type == 'Boolean':
+            default_lines.append(f"{param_var}=false")
+        elif default:
+            default_lines.append(f"{param_var}=\"{default}\"")
+        else:
+            default_lines.append(f"{param_var}=\"\"")
+
+        # Generate usage line
+        req_marker = "[REQUIRED]" if required else "[OPTIONAL]"
+        usage_lines.append(f"  --{param_name.replace('_', '-')} VALUE    {description} {req_marker}")
+
+        # Generate argument parsing
+        if param_type == 'Boolean':
+            parse_lines.append(f"            --{param_name.replace('_', '-')})")
+            parse_lines.append(f"                {param_var}=true")
+            parse_lines.append(f"                shift")
+            parse_lines.append(f"                ;;")
+        else:
+            parse_lines.append(f"            --{param_name.replace('_', '-')})")
+            parse_lines.append(f"                {param_var}=\"$2\"")
+            parse_lines.append(f"                shift 2")
+            parse_lines.append(f"                ;;")
+
+        # Generate validation
+        if required:
+            validation_lines.append(f"    if [[ -z \"${{{param_var}}}\" ]]; then")
+            validation_lines.append(f"        echo \"Error: --{param_name.replace('_', '-')} is required\" >&2")
+            validation_lines.append(f"        return 1")
+            validation_lines.append(f"    fi")
+
+        if param_type == 'File' and 'input' in param_name.lower():
+            validation_lines.append(f"    if [[ -n \"${{{param_var}}}\" && ! -f \"${{{param_var}}}\" ]]; then")
+            validation_lines.append(f"        echo \"Error: Input file does not exist: ${{{param_var}}}\" >&2")
+            validation_lines.append(f"        return 1")
+            validation_lines.append(f"    fi")
+
+    # Build execution command
+    execution_lines.append(f"    \"{tool_command}\" \\")
+    for param in parameters:
+        param_name = param.get('name', 'unknown')
+        param_var = param_name.upper().replace('-', '_')
+        param_type = param.get('type', 'Text')
+
+        if param_type == 'Boolean':
+            execution_lines.append(f"        $([[ \"${{{param_var}}}\" == \"true\" ]] && echo \"--{param_name.replace('_', '-')}\") \\")
+        else:
+            execution_lines.append(f"        $([ -n \"${{{param_var}}}\" ] && echo \"--{param_name.replace('_', '-')} \\\"${{{param_var}}}\\\" \") \\")
+
+    # Remove trailing backslash from last line
+    if execution_lines:
+        execution_lines[-1] = execution_lines[-1].rstrip(' \\')
+
+    # Build sections
+    defaults_section = '\n'.join(default_lines) if default_lines else "# No parameters defined"
+    usage_section = '\n'.join(usage_lines) if usage_lines else "  # No options"
+    parsing_section = '\n'.join(parse_lines) if parse_lines else "            # No options to parse"
+    validation_section = '\n'.join(validation_lines) if validation_lines else "    # No validation required"
+    execution_section = '\n'.join(execution_lines)
+
+    # Replace placeholders
+    wrapper = template.replace('{TOOL_NAME}', tool_name)
+    wrapper = wrapper.replace('{TOOL_DESCRIPTION}', tool_description or f'Analysis using {tool_name}')
+    wrapper = wrapper.replace('{TOOL_COMMAND}', tool_command)
+    wrapper = wrapper.replace('{DEFAULTS}', defaults_section)
+    wrapper = wrapper.replace('{USAGE_OPTIONS}', usage_section)
+    wrapper = wrapper.replace('{ARGUMENT_PARSING}', parsing_section)
+    wrapper = wrapper.replace('{VALIDATION}', validation_section)
+    wrapper = wrapper.replace('{EXECUTION}', execution_section)
+
+    return wrapper

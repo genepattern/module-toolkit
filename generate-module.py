@@ -311,6 +311,22 @@ class ModuleAgent:
         model_class = artifact_config.get('model', ArtifactModel)  # Get the Pydantic model
         formatter = artifact_config.get('formatter', lambda m: m.code)  # Get formatter function
         filename = artifact_config['filename']
+
+        # Special handling for wrapper: determine extension based on tool language
+        if artifact_name == 'wrapper':
+            tool_language = tool_info.get('language', 'python').lower()
+            # Map language to file extension
+            extension_map = {
+                'python': '.py',
+                'r': '.R',
+                'bash': '.sh',
+                'shell': '.sh',
+                'perl': '.pl',
+                'java': '.java'
+            }
+            extension = extension_map.get(tool_language, '.py')  # Default to .py
+            filename = f'wrapper{extension}'
+
         validate_tool = artifact_config['validate_tool']
         create_method = artifact_config['create_method']
         file_path = module_path / filename
@@ -543,14 +559,34 @@ class ModuleAgent:
 
             # Extract tool_info from status if not provided
             if not tool_info:
+                # Try to extract language from research_data or planning_data
+                language = 'unknown'
+                if status.research_data and isinstance(status.research_data, dict):
+                    # Try to find language info in research data
+                    research_text = str(status.research_data.get('research', ''))
+                    # Look for common language indicators
+                    if 'bioconductor' in research_text.lower() or ' r package' in research_text.lower() or 'cran' in research_text.lower():
+                        language = 'r'
+                    elif 'python' in research_text.lower() and 'pypi' in research_text.lower():
+                        language = 'python'
+
+                # Also check planning data if available
+                if language == 'unknown' and status.planning_data:
+                    plan_text = str(status.planning_data.plan if hasattr(status.planning_data, 'plan') else '')
+                    if 'bioconductor' in plan_text.lower() or ' r package' in plan_text.lower():
+                        language = 'r'
+                    elif 'python' in plan_text.lower():
+                        language = 'python'
+
                 tool_info = {
                     'name': status.tool_name,
                     'version': 'latest',
-                    'language': 'unknown',
+                    'language': language,
                     'description': '',
                     'repository_url': '',
                     'documentation_url': ''
                 }
+                self.logger.print_status(f"Detected tool language from existing data: {language}")
         else:
             self.logger.print_status(f"Generating module for: {tool_info['name']}")
             # Create module directory
