@@ -614,6 +614,10 @@ def create_documentation(context: RunContext[str], tool_info: Dict[str, Any], pl
         description = tool_info.get('description', 'Bioinformatics analysis tool')
         version = tool_info.get('version', '1.0')
         language = tool_info.get('language', 'Python')
+        tool_instructions = tool_info.get('instructions', '')
+
+        if tool_instructions:
+            print(f"✓ User provided instructions: {tool_instructions[:100]}...")
 
         # Generate README.md content
         readme_content = f"""# {tool_name}

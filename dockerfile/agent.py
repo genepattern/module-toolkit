@@ -26,6 +26,13 @@ Key requirements for GenePattern module Dockerfiles:
 - Ensure the container can run the target bioinformatics tool correctly
 - Include proper CMD or ENTRYPOINT for module execution
 
+CRITICAL DOCKER SYNTAX RULES:
+- NEVER use shell redirection or operators in COPY/ADD commands (e.g., NO "2>/dev/null", NO "||", NO "&&")
+- COPY and ADD do NOT support shell syntax - they are not shell commands
+- Only copy files that are guaranteed to exist in the build context
+- For optional files, either ensure they exist before building or omit the COPY instruction
+- Shell operators (||, &&, >, 2>&1, etc.) ONLY work in RUN commands, not COPY/ADD
+
 Guidelines:
 - Minimize image size while ensuring all dependencies are available
 - Use specific version tags for base images to ensure reproducibility
@@ -161,6 +168,10 @@ def create_dockerfile(context: RunContext[str], tool_info: Dict[str, Any], plann
         tool_name = tool_info.get('name', 'unknown')
         language = tool_info.get('language', 'python').lower()
         version = tool_info.get('version', 'latest')
+        tool_instructions = tool_info.get('instructions', '')
+
+        if tool_instructions:
+            print(f"✓ User provided instructions: {tool_instructions[:100]}...")
 
         # USE PLANNING DATA - Extract comprehensive build information
         cpu_cores = planning_data.get('cpu_cores', 1) if planning_data else 1
@@ -292,7 +303,7 @@ RUN apt-get update && \\
             # Try to install the tool, but don't fail if it's not available
             dockerfile_content += f"""# Install Python dependencies
 # Install the tool if available via pip, otherwise install common scientific packages
-RUN {install_cmd} {tool_name.lower()} 2>/dev/null || \\
+RUN {install_cmd} {tool_name.lower()} || \\
     {install_cmd} numpy pandas scipy matplotlib seaborn scikit-learn
 
 """
@@ -320,14 +331,10 @@ RUN {install_cmd} "install.packages('{tool_name}', repos='http://cran.r-project.
             wrapper_filename = f"wrapper{ext_map.get(language, '.py')}"
 
         # Add module files with proper wrapper script name
-        dockerfile_content += f"""# Copy module files
+        # Only copy files that are required and always present
+        dockerfile_content += f"""# Copy required module files
 COPY {wrapper_filename} /module/
 COPY manifest /module/
-"""
-
-        # Add optional files if they might exist
-        dockerfile_content += """COPY *.json /module/ 2>/dev/null || true
-COPY README.md /module/ 2>/dev/null || true
 
 """
 

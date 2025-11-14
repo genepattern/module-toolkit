@@ -545,6 +545,13 @@ def create_gpunit(context: RunContext[str], tool_info: Dict[str, Any], planning_
     print(f"🧪 GPUNIT TOOL: Running create_gpunit for '{tool_info.get('name', 'unknown')}' (attempt {attempt})")
     
     try:
+        # Extract tool information including instructions
+        tool_name = tool_info.get('name', 'unknown')
+        tool_instructions = tool_info.get('instructions', '')
+
+        if tool_instructions:
+            print(f"✓ User provided instructions: {tool_instructions[:100]}...")
+
         # USE PLANNING DATA - Extract comprehensive test information
         parameters = planning_data.get('parameters', []) if planning_data else []
         input_formats = planning_data.get('input_file_formats', []) if planning_data else []

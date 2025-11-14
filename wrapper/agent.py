@@ -750,6 +750,10 @@ def create_wrapper(context: RunContext[str], tool_info: Dict[str, Any], planning
     tool_name = tool_info.get('name', 'unknown')
     tool_description = tool_info.get('description', '')
     tool_language = tool_info.get('language', 'python').lower()
+    tool_instructions = tool_info.get('instructions', '')
+
+    if tool_instructions:
+        print(f"✓ User provided instructions: {tool_instructions[:100]}...")
 
     # USE PLANNING DATA - Extract all wrapper-related information
     wrapper_script = planning_data.get('wrapper_script', 'wrapper.py') if planning_data else 'wrapper.py'

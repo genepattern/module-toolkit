@@ -11,6 +11,7 @@ import sys
 import traceback
 import argparse
 import json
+import zipfile
 from pathlib import Path
 from datetime import datetime
 from typing import Dict, List, Tuple, Any
@@ -234,6 +235,10 @@ class ModuleAgent:
         self.logger.print_status("Starting research on tool information")
         
         try:
+            instructions_section = ""
+            if tool_info.get('instructions'):
+                instructions_section = f"\n            Additional Instructions:\n            {tool_info['instructions']}\n"
+
             prompt = f"""
             Research the bioinformatics tool '{tool_info['name']}' and provide comprehensive information.
             
@@ -243,7 +248,7 @@ class ModuleAgent:
             - Language: {tool_info['language']}
             - Description: {tool_info.get('description', 'Not provided')}
             - Repository: {tool_info.get('repository_url', 'Not provided')}
-            - Documentation: {tool_info.get('documentation_url', 'Not provided')}
+            - Documentation: {tool_info.get('documentation_url', 'Not provided')}{instructions_section}
             
             Please provide detailed research including:
             1. Tool purpose and scientific applications
@@ -272,6 +277,10 @@ class ModuleAgent:
         self.logger.print_status("Starting module planning and parameter analysis")
         
         try:
+            instructions_section = ""
+            if tool_info.get('instructions'):
+                instructions_section = f"\n            Additional Instructions (IMPORTANT - Pay close attention to these):\n            {tool_info['instructions']}\n"
+
             prompt = f"""
             Create a comprehensive structured plan for the GenePattern module for '{tool_info['name']}'.
             
@@ -279,7 +288,7 @@ class ModuleAgent:
             - Name: {tool_info['name']}
             - Version: {tool_info['version']}
             - Language: {tool_info['language']}
-            - Description: {tool_info.get('description', 'Not provided')}
+            - Description: {tool_info.get('description', 'Not provided')}{instructions_section}
             
             Research Results:
             {research_data.get('research', 'No research data available')}
@@ -314,18 +323,29 @@ class ModuleAgent:
 
         # Special handling for wrapper: determine extension based on tool language
         if artifact_name == 'wrapper':
-            tool_language = tool_info.get('language', 'python').lower()
-            # Map language to file extension
-            extension_map = {
-                'python': '.py',
-                'r': '.R',
-                'bash': '.sh',
-                'shell': '.sh',
-                'perl': '.pl',
-                'java': '.java'
-            }
-            extension = extension_map.get(tool_language, '.py')  # Default to .py
-            filename = f'wrapper{extension}'
+            # First, check if planning_data has a wrapper_script specified
+            planning_dict = planning_data.model_dump() if planning_data else {}
+            wrapper_script_from_plan = planning_dict.get('wrapper_script')
+
+            if wrapper_script_from_plan:
+                # Use the wrapper script name from planning data
+                filename = wrapper_script_from_plan
+                self.logger.print_status(f"Using wrapper filename from planning data: {filename}")
+            else:
+                # Fallback to language-based naming
+                tool_language = tool_info.get('language', 'python').lower()
+                # Map language to file extension
+                extension_map = {
+                    'python': '.py',
+                    'r': '.R',
+                    'bash': '.sh',
+                    'shell': '.sh',
+                    'perl': '.pl',
+                    'java': '.java'
+                }
+                extension = extension_map.get(tool_language, '.py')  # Default to .py
+                filename = f'wrapper{extension}'
+                self.logger.print_status(f"Using default wrapper filename: {filename}")
 
         validate_tool = artifact_config['validate_tool']
         create_method = artifact_config['create_method']
@@ -352,6 +372,11 @@ class ModuleAgent:
 
                 # Call the agent with appropriate prompt based on artifact type
                 if artifact_name == 'manifest':
+                    # Build instructions section if provided
+                    instructions_section = ""
+                    if tool_info.get('instructions'):
+                        instructions_section = f"\n\nAdditional Instructions (IMPORTANT):\n{tool_info['instructions']}\n"
+
                     # For manifest, use a direct prompt that doesn't mention tool names
                     prompt = f"""Generate a complete GenePattern module manifest for {tool_info['name']}.
 
@@ -360,7 +385,7 @@ Tool Information:
 - Version: {tool_info.get('version', '1.0')}
 - Language: {tool_info.get('language', 'unknown')}
 - Description: {tool_info.get('description', 'Bioinformatics analysis tool')}
-- Repository: {tool_info.get('repository_url', '')}
+- Repository: {tool_info.get('repository_url', '')}{instructions_section}
 
 Planning Data:
 {planning_data_dict}
@@ -371,12 +396,17 @@ This is attempt {attempt} of {max_loops}.
 
 Generate a complete, valid manifest file in key=value format."""
                 else:
+                    # Build instructions section if provided
+                    instructions_section = ""
+                    if tool_info.get('instructions'):
+                        instructions_section = f"\n\nIMPORTANT - Additional Instructions:\n{tool_info['instructions']}\n"
+
                     # For other artifacts, use the tool-based prompt
                     prompt = f"""Use the {create_method} tool with the following parameters:
                 - tool_info: {tool_info}
                 - planning_data: {planning_data_dict}
                 - error_report: {error_report}
-                - attempt: {attempt}
+                - attempt: {attempt}{instructions_section}
 
                 Generate the {artifact_name} artifact for {tool_info['name']}."""
 
@@ -502,6 +532,74 @@ Generate a complete, valid manifest file in key=value format."""
         
         return all_artifacts_successful
     
+    def zip_artifacts(self, module_path: Path, tool_name: str, zip_only: bool = False) -> bool:
+        """
+        Zip all artifact files into {module_name}.zip at the top level
+
+        Args:
+            module_path: Path to the module directory
+            tool_name: Name of the tool/module
+            zip_only: If True, delete artifact files after zipping
+
+        Returns:
+            True if zipping was successful, False otherwise
+        """
+        self.logger.print_section("Zipping Artifacts")
+        self.logger.print_status("Creating zip archive of artifact files")
+
+        try:
+            # Define artifact filenames to include (not dev mode files)
+            artifact_extensions = ['.py', '.R', '.sh', '.pl', '.java']  # Wrapper extensions
+            artifact_files = ['manifest', 'paramgroups.json', 'test.yml', 'README.md', 'Dockerfile']
+
+            # Collect all files to zip
+            files_to_zip = []
+            for file in module_path.iterdir():
+                if file.is_file():
+                    # Include wrapper files (files starting with 'wrapper' OR ending with wrapper extensions)
+                    if file.name.startswith('wrapper') and any(file.name.endswith(ext) for ext in artifact_extensions):
+                        files_to_zip.append(file)
+                    # Also include files ending with wrapper extensions (catches custom wrapper names like geoquery_wrapper.R)
+                    elif any(file.name.endswith(ext) for ext in artifact_extensions) and '_wrapper' in file.name.lower():
+                        files_to_zip.append(file)
+                    # Include other artifact files
+                    elif file.name in artifact_files:
+                        files_to_zip.append(file)
+
+            if not files_to_zip:
+                self.logger.print_status("No artifact files found to zip", "WARNING")
+                return False
+
+            # Create zip file
+            zip_filename = f"{tool_name.lower().replace(' ', '_').replace('-', '_')}.zip"
+            zip_path = module_path / zip_filename
+
+            with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
+                for file in files_to_zip:
+                    # Add file at top level (arcname is just the filename)
+                    zipf.write(file, arcname=file.name)
+                    self.logger.print_status(f"  Added {file.name} to zip")
+
+            zip_size = zip_path.stat().st_size
+            self.logger.print_status(f"✅ Created {zip_filename} ({zip_size:,} bytes)", "SUCCESS")
+
+            # If zip_only is True, delete the artifact files
+            if zip_only:
+                self.logger.print_status("Cleaning up artifact files (--zip-only specified)")
+                for file in files_to_zip:
+                    try:
+                        file.unlink()
+                        self.logger.print_status(f"  Deleted {file.name}")
+                    except Exception as e:
+                        self.logger.print_status(f"  Failed to delete {file.name}: {str(e)}", "WARNING")
+
+            return True
+
+        except Exception as e:
+            self.logger.print_status(f"Failed to create zip archive: {str(e)}", "ERROR")
+            self.logger.print_status(f"Traceback: {traceback.format_exc()}", "DEBUG")
+            return False
+
     def print_final_report(self, status: ModuleGenerationStatus):
         """Print comprehensive final report"""
         self.logger.print_section("Final Report")
@@ -569,7 +667,7 @@ Generate a complete, valid manifest file in key=value format."""
                 for error in status.error_messages:
                     print(f"  - {error}")
 
-    def run(self, tool_info: Dict[str, str] = None, skip_artifacts: List[str] = None, dev_mode: bool = False, resume_status: ModuleGenerationStatus = None, max_loops: int = MAX_ARTIFACT_LOOPS) -> int:
+    def run(self, tool_info: Dict[str, str] = None, skip_artifacts: List[str] = None, dev_mode: bool = False, resume_status: ModuleGenerationStatus = None, max_loops: int = MAX_ARTIFACT_LOOPS, no_zip: bool = False, zip_only: bool = False) -> int:
         """Run the complete module generation process"""
 
         # Handle resume mode
@@ -670,6 +768,10 @@ Generate a complete, valid manifest file in key=value format."""
 
         artifacts_success = self.generate_all_artifacts(tool_info, status.planning_data, module_path, status, skip_artifacts, max_loops, dev_mode)
 
+        # Phase 4: Zip artifacts (if successful and not disabled)
+        if artifacts_success and not no_zip:
+            self.zip_artifacts(module_path, tool_info['name'], zip_only)
+
         # Final report
         self.print_final_report(status)
 
@@ -710,7 +812,8 @@ class GenerationScript:
         tool_info['description'] = input("Brief description (optional): ").strip()
         tool_info['repository_url'] = input("Repository URL (optional): ").strip()
         tool_info['documentation_url'] = input("Documentation URL (optional): ").strip()
-        
+        tool_info['instructions'] = input("Additional instructions/context (optional): ").strip()
+
         return tool_info
 
     def parse_arguments(self):
@@ -743,6 +846,7 @@ class GenerationScript:
         parser.add_argument('--description', type=str, help='Brief description of the tool')
         parser.add_argument('--repository-url', type=str, help='URL of the source code repository')
         parser.add_argument('--documentation-url', type=str, help='URL of the tool documentation')
+        parser.add_argument('--instructions', type=str, help='Additional instructions and context for module generation (e.g., which features to expose, which function to call)')
 
         # Artifact skip flags
         parser.add_argument('--skip-wrapper', action='store_true', help='Skip generating wrapper script')
@@ -767,6 +871,10 @@ class GenerationScript:
         # Output directory
         parser.add_argument('--output-dir', default=DEFAULT_OUTPUT_DIR, type=str, help=f'Output directory for generated modules (default: {DEFAULT_OUTPUT_DIR})')
         
+        # Zip options
+        parser.add_argument('--no-zip', action='store_true', help='Skip creating a zip archive of artifact files')
+        parser.add_argument('--zip-only', action='store_true', help='After creating zip archive, delete the individual artifact files (keeps only the zip)')
+
         self.args = parser.parse_args()
 
     def tool_info_from_args(self):
@@ -777,7 +885,8 @@ class GenerationScript:
             'language': self.args.language or "unknown",
             'description': self.args.description or "",
             'repository_url': self.args.repository_url or "",
-            'documentation_url': self.args.documentation_url or ""
+            'documentation_url': self.args.documentation_url or "",
+            'instructions': self.args.instructions or ""
         }
 
     def parse_skip_artifacts(self):
@@ -818,7 +927,14 @@ class GenerationScript:
             if self.args.resume:
                 self.logger.print_status(f"Resuming from previous run in directory: {self.args.resume}")
                 status = self.module_agent.load_status(self.args.resume)
-                return self.module_agent.run(skip_artifacts=self.skip_artifacts, dev_mode=self.args.dev_mode, resume_status=status, max_loops=self.args.max_loops)
+                return self.module_agent.run(
+                    skip_artifacts=self.skip_artifacts,
+                    dev_mode=self.args.dev_mode,
+                    resume_status=status,
+                    max_loops=self.args.max_loops,
+                    no_zip=self.args.no_zip,
+                    zip_only=self.args.zip_only
+                )
             else:
                 # Get tool information from args or user input
                 if self.args.name:
@@ -827,7 +943,14 @@ class GenerationScript:
                     self.tool_info = self.get_user_input()
 
                 # Run the generation process
-                return self.module_agent.run(self.tool_info, self.skip_artifacts, self.args.dev_mode, max_loops=self.args.max_loops)
+                return self.module_agent.run(
+                    self.tool_info,
+                    self.skip_artifacts,
+                    self.args.dev_mode,
+                    max_loops=self.args.max_loops,
+                    no_zip=self.args.no_zip,
+                    zip_only=self.args.zip_only
+                )
 
         except KeyboardInterrupt:
             self.logger.print_status("\nGeneration interrupted by user", "WARNING")

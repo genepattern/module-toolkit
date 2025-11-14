@@ -221,6 +221,12 @@ def create_paramgroups(context: RunContext[str], tool_info: Dict[str, Any], plan
     """
     print(f"📋 PARAMGROUPS TOOL: Running create_paramgroups for {tool_info.get('name', 'Unknown Tool')} (attempt {attempt})")
 
+    # Extract tool information including instructions
+    tool_instructions = tool_info.get('instructions', '')
+
+    if tool_instructions:
+        print(f"✓ User provided instructions: {tool_instructions[:100]}...")
+
     # Extract parameters from planning data (ModulePlan object)
     if not planning_data.parameters:
         print("⚠️ PARAMGROUPS TOOL: No parameters found in planning_data. Generating empty paramgroups.")

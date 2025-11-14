@@ -11,13 +11,13 @@ load_dotenv()
 
 system_prompt = """
 You are an expert GenePattern platform specialist with deep knowledge of module development 
-and metadata management. Your task is to generate accurate, compliant manifest files that 
-properly define GenePattern modules according to platform specifications.
+and metadata management. Your task is to generate accurate, compliant manifest data that 
+properly defines GenePattern modules according to platform specifications.
 
-CRITICAL: Your output must ALWAYS be valid manifest content only - no markdown, no explanations, no text before or after the manifest content. Output ONLY the key=value pairs.
+CRITICAL: When asked to generate a manifest, you MUST call the create_manifest tool and return 
+its result directly. Do not add explanations or additional text after calling the tool.
 
 Key requirements for GenePattern module manifests:
-- Follow exact key=value format (no spaces around equals sign)
 - Include all required keys: LSID, name, commandLine
 - Generate valid LSIDs following urn:lsid format
 - Create clear, descriptive module names and descriptions
@@ -27,13 +27,12 @@ Key requirements for GenePattern module manifests:
 
 Manifest Key Guidelines:
 - LSID: Must follow format urn:lsid:authority:namespace:object:revision
-- name: Clear, descriptive module name (no spaces, use underscores/dots)
+- name: Clear, descriptive module name (use dots/underscores as needed)
 - description: Concise explanation of module purpose and functionality
 - commandLine: Template with parameter placeholders like <input.file>
 - version: Semantic version (e.g., 1.0.0)
 - author: Module author information
 - categories: Semicolon-separated category list
-- documentationUrl: Link to detailed documentation
 
 Command Line Template Rules:
 - Use angle brackets for parameters: <parameter.name>
@@ -42,9 +41,8 @@ Command Line Template Rules:
 - Support both required and optional parameters
 - Follow platform execution patterns
 
-REMEMBER: Output ONLY valid manifest content in key=value format. No explanations, no markdown, no additional text.
-Always generate complete, valid manifest files that enable proper module 
-registration and execution within the GenePattern platform.
+When generating manifests, use the create_manifest tool which will handle all the formatting
+and structure requirements. Always return structured data that can be validated.
 """
 
 # Create agent without MCP toolsets - validation happens separately via generate-module.py
@@ -405,7 +403,7 @@ def optimize_command_line_template(context: RunContext[str], current_command: st
 
 
 @manifest_agent.tool
-def create_manifest(context: RunContext[str], tool_info: Dict[str, Any] = None, planning_data: Dict[str, Any] = None, error_report: str = "", attempt: int = 1) -> str:
+def create_manifest(context: RunContext[str], tool_info: Dict[str, Any] = None, planning_data: Dict[str, Any] = None, error_report: str = "", attempt: int = 1) -> Dict[str, Any]:
     """
     Generate a complete manifest file for the GenePattern module.
     
@@ -416,7 +414,7 @@ def create_manifest(context: RunContext[str], tool_info: Dict[str, Any] = None, 
         attempt: Attempt number for retry logic
     
     Returns:
-        Complete manifest content ready for validation
+        Dictionary with manifest fields ready to be converted to ManifestModel
     """
     print(f"📋 MANIFEST TOOL: Running create_manifest (attempt {attempt})")
     
@@ -426,6 +424,13 @@ def create_manifest(context: RunContext[str], tool_info: Dict[str, Any] = None, 
     import ast
 
     try:
+        # Extract tool information including instructions
+        tool_name = tool_info.get('name', 'unknown') if tool_info else 'unknown'
+        tool_instructions = tool_info.get('instructions', '') if tool_info else ''
+
+        if tool_instructions:
+            print(f"✓ User provided instructions: {tool_instructions[:100]}...")
+
         # Parse planning_data to extract structured information
         planning_dict = {}
         if planning_data:
@@ -573,40 +578,49 @@ def create_manifest(context: RunContext[str], tool_info: Dict[str, Any] = None, 
         if attempt > 1 and error_report:
             print(f"⚠️ Retry attempt {attempt} - previous error: {error_report[:100]}")
 
-        # Generate manifest file with planning data
-        manifest_content = f"""name={tool_name}
-LSID=urn:lsid:genepattern.org:module.analysis:{tool_name.lower().replace(' ', '').replace('.', '')}:1
-version={tool_version}
-description={tool_description}
-author={author}
-organization=GenePattern
-categories={categories_str}
-commandLine={command_line}
-language={tool_language}
-operating.system=any
-cpu.type=any
-taskDoc=README.md
-fileFormat=
-privacy=public
-quality=development
-documentation=README.md
-license=MIT
-tags={tool_name.lower()};analysis
-job.cpuCount={cpu_cores}
-job.memory={memory}
-"""
-        
+        # Generate LSID
+        lsid_object = tool_name.lower().replace(' ', '').replace('.', '').replace('_', '')
+        lsid = f"urn:lsid:genepattern.org:module.analysis:{lsid_object}:1"
+
+        # Return structured dictionary that can be converted to ManifestModel
+        manifest_dict = {
+            "name": tool_name,
+            "LSID": lsid,
+            "version": tool_version,
+            "description": tool_description,
+            "author": author,
+            "categories": categories_str,
+            "commandLine": command_line,
+            "language": tool_language,
+            "os": "any",
+            "cpuType": "any",
+            "taskDoc": "README.md",
+            "fileFormat": "",
+            "privacy": "public",
+            "quality": "development",
+            "job.cpuCount": str(cpu_cores),
+            "job.memory": memory,
+            "artifact_report": f"Generated manifest for {tool_name} module with {len(command_line.split())} command components",
+            "artifact_status": "success"
+        }
+
         print("✅ MANIFEST TOOL: create_manifest completed successfully")
-        return manifest_content
-        
+        return manifest_dict
+
     except Exception as e:
-        print(f"❌ MANIFEST TOOL: create_manifest failed: {e}")
+        error_msg = f"Error in create_manifest: {str(e)}"
+        print(f"❌ MANIFEST TOOL: create_manifest failed: {error_msg}")
         import traceback
-        print(f"Traceback: {traceback.format_exc()}")
-        # Return a minimal valid manifest
-        return f"""name=UnknownTool
-LSID=urn:lsid:genepattern.org:module.analysis:unknowntool:1
-version=1.0
-description=Bioinformatics analysis tool
-commandLine=<wrapper.py> <input.file> <output.prefix>
-"""
+        traceback_str = traceback.format_exc()
+        print(f"Traceback: {traceback_str}")
+
+        # Return a minimal valid manifest dict with error details
+        return {
+            "name": "UnknownTool",
+            "LSID": "urn:lsid:genepattern.org:module.analysis:unknowntool:1",
+            "version": "1.0",
+            "description": "Bioinformatics analysis tool",
+            "commandLine": "<wrapper.py> <input.file> <output.prefix>",
+            "artifact_report": f"Error during manifest generation: {error_msg}\n\nTraceback:\n{traceback_str}",
+            "artifact_status": "error"
+        }
