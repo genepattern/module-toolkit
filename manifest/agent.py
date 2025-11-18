@@ -50,6 +50,60 @@ manifest_agent = Agent(configured_llm_model(), system_prompt=system_prompt)
 
 
 @manifest_agent.tool
+def validate_manifest(context: RunContext[str], path: str) -> str:
+    """
+    Validate GenePattern manifest files.
+
+    This tool validates GenePattern module manifest files to ensure they conform
+    to the required format and contain all necessary metadata for module execution.
+
+    Args:
+        path: Path to the manifest file or directory containing a manifest file.
+              Can be a specific manifest.json file or a directory that contains one.
+
+    Returns:
+        A string containing the validation results, indicating whether the manifest
+        passed or failed validation along with detailed error messages if applicable.
+    """
+    import io
+    import sys
+    from contextlib import redirect_stderr, redirect_stdout
+    import traceback
+
+    print(f"🔍 MANIFEST TOOL: Running validate_manifest on '{path}'")
+
+    try:
+        import manifest.linter
+
+        argv = [path]
+        stdout_capture = io.StringIO()
+        stderr_capture = io.StringIO()
+
+        try:
+            with redirect_stdout(stdout_capture), redirect_stderr(stderr_capture):
+                exit_code = manifest.linter.main(argv)
+
+            output = stdout_capture.getvalue()
+            errors = stderr_capture.getvalue()
+            result_text = f"Manifest validation {'PASSED' if exit_code == 0 else 'FAILED'}\n\n{output}"
+            if errors:
+                result_text += f"\nErrors:\n{errors}"
+            return result_text
+        except SystemExit as e:
+            exit_code = e.code if e.code is not None else 0
+            output = stdout_capture.getvalue()
+            errors = stderr_capture.getvalue()
+            result_text = f"Manifest validation {'PASSED' if exit_code == 0 else 'FAILED'}\n\n{output}"
+            if errors:
+                result_text += f"\nErrors:\n{errors}"
+            return result_text
+    except Exception as e:
+        error_msg = f"Error running manifest linter: {str(e)}\n{traceback.format_exc()}"
+        print(f"❌ MANIFEST TOOL: {error_msg}")
+        return error_msg
+
+
+@manifest_agent.tool
 def analyze_module_metadata(context: RunContext[str], tool_name: str, tool_info: Dict[str, Any], parameters: List[Dict[str, Any]] = None) -> str:
     """
     Analyze module information to determine appropriate manifest metadata and structure.

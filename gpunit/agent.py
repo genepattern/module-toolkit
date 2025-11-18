@@ -1,7 +1,6 @@
 import yaml
 from typing import Dict, Any, List
 from pydantic_ai import Agent, RunContext
-from pydantic_ai.mcp import MCPServerStdio
 from dotenv import load_dotenv
 from agents.models import configured_llm_model
 
@@ -60,11 +59,76 @@ Always generate complete, valid GPUnit test files that provide thorough validati
 of module functionality and can be executed reliably in automated testing environments.
 """
 
-mcp_tools = MCPServerStdio('python', args=['mcp/server.py'], timeout=10)
+# Create agent without MCP dependency
+gpunit_agent = Agent(configured_llm_model(), system_prompt=system_prompt)
 
 
-# Create agent 
-gpunit_agent = Agent(configured_llm_model(), system_prompt=system_prompt, toolsets=[mcp_tools])
+@gpunit_agent.tool
+def validate_gpunit(context: RunContext[str], path: str, module: str = None, parameters: List[str] = None) -> str:
+    """
+    Validate GPUnit test definition YAML files.
+
+    This tool validates GPUnit YAML files that define automated tests for GenePattern
+    modules. GPUnit tests ensure modules work correctly by running them with known
+    inputs and verifying expected outputs.
+
+    Args:
+        path: Path to the GPUnit YAML file to validate. The file should contain
+              test definitions with input parameters, expected outputs, and
+              validation criteria.
+        module: Optional expected module name that the GPUnit test should target.
+               If provided, validates that the test file correctly references
+               this module and its interface.
+        parameters: Optional list of parameter names that should be tested.
+                   If provided, validates that the GPUnit test covers all
+                   specified parameters with appropriate test cases.
+
+    Returns:
+        A string containing the validation results, indicating whether the GPUnit
+        test file is properly structured and contains valid test definitions,
+        along with any syntax or logic errors.
+    """
+    import io
+    import sys
+    from contextlib import redirect_stderr, redirect_stdout
+    import traceback
+
+    print(f"🔍 GPUNIT TOOL: Running validate_gpunit on '{path}'")
+
+    try:
+        import gpunit.linter
+
+        argv = [path]
+        if module:
+            argv.extend(["--module", module])
+        if parameters and isinstance(parameters, list):
+            argv.extend(["--parameters"] + parameters)
+
+        stdout_capture = io.StringIO()
+        stderr_capture = io.StringIO()
+
+        try:
+            with redirect_stdout(stdout_capture), redirect_stderr(stderr_capture):
+                exit_code = gpunit.linter.main(argv)
+
+            output = stdout_capture.getvalue()
+            errors = stderr_capture.getvalue()
+            result_text = f"GPUnit validation {'PASSED' if exit_code == 0 else 'FAILED'}\n\n{output}"
+            if errors:
+                result_text += f"\nErrors:\n{errors}"
+            return result_text
+        except SystemExit as e:
+            exit_code = e.code if e.code is not None else 0
+            output = stdout_capture.getvalue()
+            errors = stderr_capture.getvalue()
+            result_text = f"GPUnit validation {'PASSED' if exit_code == 0 else 'FAILED'}\n\n{output}"
+            if errors:
+                result_text += f"\nErrors:\n{errors}"
+            return result_text
+    except Exception as e:
+        error_msg = f"Error running gpunit linter: {str(e)}\n{traceback.format_exc()}"
+        print(f"❌ GPUNIT TOOL: {error_msg}")
+        return error_msg
 
 
 @gpunit_agent.tool

@@ -1,6 +1,5 @@
 from typing import Dict, Any
 from pydantic_ai import Agent, RunContext
-from pydantic_ai.mcp import MCPServerStdio
 from dotenv import load_dotenv
 from agents.models import configured_llm_model
 
@@ -48,10 +47,76 @@ Always generate complete, working Dockerfiles that can be built and tested immed
 Provide clear comments explaining each section and any complex installation steps.
 """
 
-mcp_tools = MCPServerStdio('python', args=['mcp/server.py'], timeout=10)
+# Create agent without MCP dependency
+dockerfile_agent = Agent(configured_llm_model(), system_prompt=system_prompt)
 
-# Create agent 
-dockerfile_agent = Agent(configured_llm_model(), system_prompt=system_prompt, toolsets=[mcp_tools])
+
+@dockerfile_agent.tool
+def validate_dockerfile(context: RunContext[str], path: str, tag: str = None, cmd: str = None, cleanup: bool = True) -> str:
+    """
+    Validate Dockerfiles for GenePattern modules.
+
+    This tool validates Dockerfile syntax and structure, optionally builds and tests
+    the Docker image to ensure it can be used for GenePattern module execution.
+
+    Args:
+        path: Path to the Dockerfile or directory containing a Dockerfile.
+              If a directory is provided, looks for 'Dockerfile' in that directory.
+        tag: Optional Docker image tag to use when building the image for testing.
+             If not provided, a default tag will be generated.
+        cmd: Optional command to run inside the container for testing.
+             If provided, the tool will start a container and execute this command
+             to verify the image works correctly.
+        cleanup: Whether to clean up Docker images after validation (default: True).
+                Setting to False will leave test images on the system for debugging.
+
+    Returns:
+        A string containing the validation results, including build output,
+        test results, and any error messages.
+    """
+    import io
+    import sys
+    from contextlib import redirect_stderr, redirect_stdout
+    import traceback
+
+    print(f"🔍 DOCKERFILE TOOL: Running validate_dockerfile on '{path}'")
+
+    try:
+        import dockerfile.linter
+
+        argv = [path]
+        if tag:
+            argv.extend(["-t", tag])
+        if cmd:
+            argv.extend(["-c", cmd])
+        if not cleanup:
+            argv.append("--no-cleanup")
+
+        stdout_capture = io.StringIO()
+        stderr_capture = io.StringIO()
+
+        try:
+            with redirect_stdout(stdout_capture), redirect_stderr(stderr_capture):
+                exit_code = dockerfile.linter.main(argv)
+
+            output = stdout_capture.getvalue()
+            errors = stderr_capture.getvalue()
+            result_text = f"Dockerfile validation {'PASSED' if exit_code == 0 else 'FAILED'}\n\n{output}"
+            if errors:
+                result_text += f"\nErrors:\n{errors}"
+            return result_text
+        except SystemExit as e:
+            exit_code = e.code if e.code is not None else 0
+            output = stdout_capture.getvalue()
+            errors = stderr_capture.getvalue()
+            result_text = f"Dockerfile validation {'PASSED' if exit_code == 0 else 'FAILED'}\n\n{output}"
+            if errors:
+                result_text += f"\nErrors:\n{errors}"
+            return result_text
+    except Exception as e:
+        error_msg = f"Error running dockerfile linter: {str(e)}\n{traceback.format_exc()}"
+        print(f"❌ DOCKERFILE TOOL: {error_msg}")
+        return error_msg
 
 
 @dockerfile_agent.tool

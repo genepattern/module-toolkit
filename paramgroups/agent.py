@@ -1,7 +1,6 @@
 import json
 from typing import List, Dict, Any
 from pydantic_ai import Agent, RunContext
-from pydantic_ai.mcp import MCPServerStdio
 from dotenv import load_dotenv
 from agents.models import configured_llm_model
 from agents.planner import ModulePlan
@@ -45,10 +44,72 @@ Best Practices:
 REMEMBER: Output ONLY valid JSON. No explanations, no markdown, no additional text.
 """
 
-mcp_tools = MCPServerStdio('python', args=['mcp/server.py'], timeout=10)
+# Create agent without MCP dependency
+paramgroups_agent = Agent(configured_llm_model(), system_prompt=system_prompt)
 
-# Create agent 
-paramgroups_agent = Agent(configured_llm_model(), system_prompt=system_prompt, toolsets=[mcp_tools])
+
+@paramgroups_agent.tool
+def validate_paramgroups(context: RunContext[str], path: str, parameters: List[str] = None) -> str:
+    """
+    Validate GenePattern paramgroups.json files.
+
+    This tool validates paramgroups.json files that define parameter groupings
+    and UI layout for GenePattern modules. These files control how parameters
+    are organized and displayed in the GenePattern web interface.
+
+    Args:
+        path: Path to the paramgroups.json file to validate. The file should
+              contain valid JSON with parameter group definitions, including
+              group names, descriptions, and parameter memberships.
+        parameters: Optional list of parameter names that should be included
+                   in the parameter groups. If provided, validates that all
+                   specified parameters are properly assigned to groups and
+                   that no orphaned parameters exist.
+
+    Returns:
+        A string containing the validation results, indicating whether the
+        paramgroups.json file is properly formatted and contains valid parameter
+        groupings, along with any JSON syntax errors or logical inconsistencies.
+    """
+    import io
+    import sys
+    from contextlib import redirect_stderr, redirect_stdout
+    import traceback
+
+    print(f"🔍 PARAMGROUPS TOOL: Running validate_paramgroups on '{path}'")
+
+    try:
+        import paramgroups.linter
+
+        argv = [path]
+        if parameters and isinstance(parameters, list):
+            argv.extend(["--parameters"] + parameters)
+
+        stdout_capture = io.StringIO()
+        stderr_capture = io.StringIO()
+
+        try:
+            with redirect_stdout(stdout_capture), redirect_stderr(stderr_capture):
+                exit_code = paramgroups.linter.main(argv)
+
+            output = stdout_capture.getvalue()
+            errors = stderr_capture.getvalue()
+            result_text = f"Paramgroups validation {'PASSED' if exit_code == 0 else 'FAILED'}\n\n{output}"
+            if errors:
+                result_text += f"\nErrors:\n{errors}"
+            return result_text
+        except SystemExit as e:
+            exit_code = e.code if e.code is not None else 0
+            output = stdout_capture.getvalue()
+            errors = stderr_capture.getvalue()
+            result_text = f"Paramgroups validation {'PASSED' if exit_code == 0 else 'FAILED'}\n\n{output}"
+            if errors:
+                result_text += f"\nErrors:\n{errors}"
+            return result_text
+    except Exception as e:
+        error_msg = f"Error running paramgroups linter: {str(e)}\n{traceback.format_exc()}"
+        print(f"❌ PARAMGROUPS TOOL: {error_msg}")
+        return error_msg
 
 
 @paramgroups_agent.tool

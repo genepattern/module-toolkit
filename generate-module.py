@@ -17,7 +17,7 @@ from datetime import datetime
 from typing import Dict, List, Tuple, Any
 from dataclasses import dataclass
 from pydantic_ai import Agent
-from pydantic_ai.mcp import MCPServerStdio
+# from pydantic_ai.mcp import MCPServerStdio
 from dotenv import load_dotenv
 
 # Load environment variables from .env file
@@ -467,23 +467,48 @@ Generate a complete, valid manifest file in key=value format."""
         return False
 
     def validate_artifact(self, file_path: str, validate_tool: str) -> Dict[str, Any]:
-        """Validate an artifact using the MCP server"""
+        """Validate an artifact using its agent's Pydantic AI validation tool"""
         try:
             self.logger.print_status(f"Validating with {validate_tool}")
 
-            # Create a temporary agent with MCP tools to run validation
-            validation_agent = Agent(
-                model=configured_llm_model(),
-                toolsets=[MCPServerStdio('python', args=['mcp/server.py'], timeout=10)]
+            # Import the validation function directly from the respective agent
+            # Map validate_tool names to their agent modules and function names
+            validation_map = {
+                'validate_manifest': ('manifest.agent', 'validate_manifest'),
+                'validate_dockerfile': ('dockerfile.agent', 'validate_dockerfile'),
+                'validate_documentation': ('documentation.agent', 'validate_documentation'),
+                'validate_gpunit': ('gpunit.agent', 'validate_gpunit'),
+                'validate_paramgroups': ('paramgroups.agent', 'validate_paramgroups'),
+                'validate_wrapper': ('wrapper.agent', 'validate_wrapper'),
+            }
+
+            if validate_tool not in validation_map:
+                return {'success': False, 'error': f"Unknown validation tool: {validate_tool}"}
+
+            module_name, func_name = validation_map[validate_tool]
+
+            # Import the validation function
+            import importlib
+            agent_module = importlib.import_module(module_name)
+            validate_func = getattr(agent_module, func_name)
+
+            # Create a minimal RunContext for the validation tool
+            from pydantic_ai import RunContext
+
+            # We need to create a proper context - the validation tools are decorated with @agent.tool
+            # which means they expect a RunContext. However, we can call them directly since they're
+            # just regular functions that happen to be registered as tools.
+            # Create a minimal context
+            ctx = RunContext(
+                deps=None,
+                retry=0,
+                messages=[],
+                model_settings=None
             )
 
-            # Use the agent to call the validation tool
-            prompt = f"Use the {validate_tool} tool to validate the file at path: {file_path}"
-            result = validation_agent.run_sync(prompt)
-
-            # Parse the validation output more carefully
-            output = result.output
-            self.logger.print_status(f"Validation output: {output[:200]}...")  # Log first 200 chars for debugging
+            # Call the validation function directly
+            # The validation functions have signatures like: validate_manifest(ctx, path, ...)
+            output = validate_func(ctx, path=file_path)
 
             # Look for explicit PASS/FAIL indicators from the linter
             output_lower = output.lower()
@@ -492,6 +517,9 @@ Generate a complete, valid manifest file in key=value format."""
             if any(indicator in output_lower for indicator in [
                 "fail:", "failed", "error:", "invalid json", "validation failed"
             ]):
+                # Print the full validation output for debugging
+                self.logger.print_status("Validation failed. Full validation output:", "ERROR")
+                print(output)  # Print full output directly without truncation
                 return {'success': False, 'error': output}
 
             # Check for explicit success indicators (expanded to catch more patterns)
@@ -499,15 +527,21 @@ Generate a complete, valid manifest file in key=value format."""
                 "pass:", "passed", "validation passed", "has passed", "**passed**",
                 "successfully", "validation successful", "all checks passed"
             ]):
+                self.logger.print_status("✅ Validation passed", "SUCCESS")
                 return {'success': True, 'result': output}
 
             # If we can't determine success/failure clearly, default to failure for safety
             else:
                 self.logger.print_status(f"Ambiguous validation result, defaulting to failure", "WARNING")
+                self.logger.print_status("Full validation output:", "WARNING")
+                print(output)  # Print full output directly
                 return {'success': False, 'error': f"Ambiguous validation result: {output}"}
 
         except Exception as e:
-            return {'success': False, 'error': f"Validation error: {str(e)}"}
+            error_msg = f"Validation error: {str(e)}"
+            self.logger.print_status(error_msg, "ERROR")
+            self.logger.print_status(f"Traceback: {traceback.format_exc()}", "DEBUG")
+            return {'success': False, 'error': error_msg}
 
     def generate_all_artifacts(self, tool_info: Dict[str, str], planning_data: ModulePlan, module_path: Path, status: ModuleGenerationStatus, skip_artifacts: List[str] = None, max_loops: int = MAX_ARTIFACT_LOOPS, dev_mode: bool = False) -> bool:
         """Run artifact generation phase using artifact agents"""

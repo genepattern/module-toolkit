@@ -2,7 +2,6 @@ import re
 from typing import Dict, Any, List
 from pathlib import Path
 from pydantic_ai import Agent, RunContext
-from pydantic_ai.mcp import MCPServerStdio
 from dotenv import load_dotenv
 from agents.models import configured_llm_model
 
@@ -97,10 +96,73 @@ Always generate complete, production-ready wrapper scripts that provide reliable
 integration between GenePattern and bioinformatics tools with excellent user experience.
 """
 
-mcp_tools = MCPServerStdio('python', args=['mcp/server.py'], timeout=10)
+# Create agent without MCP dependency
+wrapper_agent = Agent(configured_llm_model(), system_prompt=system_prompt)
 
-# Create agent 
-wrapper_agent = Agent(configured_llm_model(), system_prompt=system_prompt, toolsets=[mcp_tools])
+
+@wrapper_agent.tool
+def validate_wrapper(context: RunContext[str], script_path: str, parameters: List[str] = None) -> str:
+    """
+    Validate GenePattern wrapper scripts.
+
+    This tool validates wrapper scripts that serve as the interface between
+    GenePattern and the underlying analysis tools. Wrapper scripts handle
+    parameter parsing, input validation, tool execution, and output formatting.
+
+    Args:
+        script_path: Path to the wrapper script file to validate. Can be Python,
+                    R, shell script, or other executable formats. The script should
+                    follow GenePattern wrapper conventions for parameter handling
+                    and output generation.
+        parameters: Optional list of parameter names that the wrapper script
+                   should handle. If provided, validates that the script properly
+                   processes all specified parameters, including required parameter
+                   validation and optional parameter defaults.
+
+    Returns:
+        A string containing the validation results, indicating whether the wrapper
+        script follows proper conventions, handles parameters correctly, and includes
+        necessary error handling, along with any syntax errors or missing functionality.
+    """
+    import io
+    import sys
+    from contextlib import redirect_stderr, redirect_stdout
+    import traceback
+
+    print(f"🔍 WRAPPER TOOL: Running validate_wrapper on '{script_path}'")
+
+    try:
+        import wrapper.linter
+
+        argv = [script_path]
+        if parameters and isinstance(parameters, list):
+            argv.extend(["--parameters"] + parameters)
+
+        stdout_capture = io.StringIO()
+        stderr_capture = io.StringIO()
+
+        try:
+            with redirect_stdout(stdout_capture), redirect_stderr(stderr_capture):
+                exit_code = wrapper.linter.main(argv)
+
+            output = stdout_capture.getvalue()
+            errors = stderr_capture.getvalue()
+            result_text = f"Wrapper validation {'PASSED' if exit_code == 0 else 'FAILED'}\n\n{output}"
+            if errors:
+                result_text += f"\nErrors:\n{errors}"
+            return result_text
+        except SystemExit as e:
+            exit_code = e.code if e.code is not None else 0
+            output = stdout_capture.getvalue()
+            errors = stderr_capture.getvalue()
+            result_text = f"Wrapper validation {'PASSED' if exit_code == 0 else 'FAILED'}\n\n{output}"
+            if errors:
+                result_text += f"\nErrors:\n{errors}"
+            return result_text
+    except Exception as e:
+        error_msg = f"Error running wrapper linter: {str(e)}\n{traceback.format_exc()}"
+        print(f"❌ WRAPPER TOOL: {error_msg}")
+        return error_msg
 
 
 @wrapper_agent.tool

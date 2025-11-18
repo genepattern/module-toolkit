@@ -1,7 +1,6 @@
 import re
 from typing import Dict, Any, List
 from pydantic_ai import Agent, RunContext
-from pydantic_ai.mcp import MCPServerStdio
 from dotenv import load_dotenv
 from agents.models import configured_llm_model
 
@@ -49,10 +48,76 @@ Always generate complete, well-structured documentation that enables users to
 successfully apply the module to their research with confidence and understanding.
 """
 
-mcp_tools = MCPServerStdio('python', args=['mcp/server.py'], timeout=10)
+# Create agent without MCP dependency
+documentation_agent = Agent(configured_llm_model(), system_prompt=system_prompt)
 
-# Create agent 
-documentation_agent = Agent(configured_llm_model(), system_prompt=system_prompt, toolsets=[mcp_tools])
+
+@documentation_agent.tool
+def validate_documentation(context: RunContext[str], path_or_url: str, module: str = None, parameters: List[str] = None) -> str:
+    """
+    Validate GenePattern module documentation files or URLs.
+
+    This tool validates documentation to ensure it contains proper descriptions,
+    parameter documentation, and usage instructions for GenePattern modules.
+    It can validate local files or remote documentation URLs.
+
+    Args:
+        path_or_url: Path to a local documentation file (e.g., README.md) or a URL
+                    pointing to online documentation. Supports Markdown, plain text,
+                    and HTML formats.
+        module: Optional expected module name that should be documented.
+               If provided, the tool will verify that the documentation properly
+               references this module name.
+        parameters: Optional list of parameter names that should be documented.
+                   If provided, the tool will verify that each parameter is
+                   properly described in the documentation with usage examples.
+
+    Returns:
+        A string containing the validation results, indicating whether the
+        documentation is complete and properly formatted, along with details
+        about any missing or incorrect content.
+    """
+    import io
+    import sys
+    from contextlib import redirect_stderr, redirect_stdout
+    import traceback
+
+    print(f"🔍 DOCUMENTATION TOOL: Running validate_documentation on '{path_or_url}'")
+
+    try:
+        import documentation.linter
+
+        argv = [path_or_url]
+        if module:
+            argv.extend(["--module", module])
+        if parameters and isinstance(parameters, list):
+            argv.extend(["--parameters"] + parameters)
+
+        stdout_capture = io.StringIO()
+        stderr_capture = io.StringIO()
+
+        try:
+            with redirect_stdout(stdout_capture), redirect_stderr(stderr_capture):
+                exit_code = documentation.linter.main(argv)
+
+            output = stdout_capture.getvalue()
+            errors = stderr_capture.getvalue()
+            result_text = f"Documentation validation {'PASSED' if exit_code == 0 else 'FAILED'}\n\n{output}"
+            if errors:
+                result_text += f"\nErrors:\n{errors}"
+            return result_text
+        except SystemExit as e:
+            exit_code = e.code if e.code is not None else 0
+            output = stdout_capture.getvalue()
+            errors = stderr_capture.getvalue()
+            result_text = f"Documentation validation {'PASSED' if exit_code == 0 else 'FAILED'}\n\n{output}"
+            if errors:
+                result_text += f"\nErrors:\n{errors}"
+            return result_text
+    except Exception as e:
+        error_msg = f"Error running documentation linter: {str(e)}\n{traceback.format_exc()}"
+        print(f"❌ DOCUMENTATION TOOL: {error_msg}")
+        return error_msg
 
 
 @documentation_agent.tool
