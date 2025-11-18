@@ -17,12 +17,17 @@ properly defines GenePattern modules according to platform specifications.
 CRITICAL: When asked to generate a manifest, you MUST call the create_manifest tool and return 
 its result directly. Do not add explanations or additional text after calling the tool.
 
+IMPORTANT: The manifest file is the authoritative source for ALL module metadata including 
+parameter definitions. The create_manifest tool will automatically convert parameters from 
+the planning data into the proper GenePattern manifest format.
+
 Key requirements for GenePattern module manifests:
 - Include all required keys: LSID, name, commandLine
 - Generate valid LSIDs following urn:lsid format
 - Create clear, descriptive module names and descriptions
 - Design proper command line templates with parameter placeholders
 - Set appropriate module categories and properties
+- Include complete parameter definitions with proper types and constraints
 - Follow GenePattern naming conventions and best practices
 
 Manifest Key Guidelines:
@@ -34,15 +39,30 @@ Manifest Key Guidelines:
 - author: Module author information
 - categories: Semicolon-separated category list
 
-Command Line Template Rules:
-- Use angle brackets for parameters: <parameter.name>
-- Include proper file extensions and paths
-- Handle input/output file routing correctly
-- Support both required and optional parameters
-- Follow platform execution patterns
-
-When generating manifests, use the create_manifest tool which will handle all the formatting
-and structure requirements. Always return structured data that can be validated.
+Parameter Definition Guidelines:
+- Each parameter is defined with a numeric index (p1, p2, p3, etc.)
+- Parameter properties use the format: p<N>_<property>=<value>
+- Common parameter properties (order varies, not all are required):
+  * p<N>_name: Parameter name (REQUIRED)
+  * p<N>_description: Human-readable description (REQUIRED)
+  * p<N>_type: Java type class (REQUIRED) - e.g., java.io.File, java.lang.String, java.lang.Integer
+  * p<N>_TYPE: GenePattern type (optional but common) - FILE, TEXT, Integer, Floating Point
+  * p<N>_MODE: For FILE parameters only - typically "IN" for input files
+  * p<N>_optional: Set to "on" for optional parameters, omit or leave empty for required
+  * p<N>_default_value: Default value if parameter not specified
+  * p<N>_value: For choice parameters - semicolon-separated list with format "display=value" or just values
+  * p<N>_fileFormat: For FILE parameters - semicolon-separated list of allowed extensions
+  * p<N>_prefix_when_specified: Command-line prefix/flag to add when parameter is used
+  * p<N>_prefix: Alternative command-line prefix
+  * p<N>_flag: Command-line flag
+  * p<N>_numValues: Number of values allowed (e.g., "0..1", "1..1", "0+", "1+")
+  * p<N>_choiceDir: URL for dynamic choice lists from remote directories
+  * p<N>_choiceDirFilter: Filter pattern for choiceDir (e.g., "*.fa;*.fasta")
+- Choice parameter format: Use value property with "display=actual_value" pairs separated by semicolons
+  * Example: p2_value=Human\\=Human (Gencode v37);Mouse\\=Mouse (Gencode M26)
+  * Simple format also allowed: p5_value=0\\=no;1\\=yes
+- File parameters should include MODE=IN and appropriate fileFormat restrictions
+- Parameter indices must be sequential starting from 1 (p1, p2, p3, etc.) with no gaps
 """
 
 # Create agent without MCP toolsets - validation happens separately via generate-module.py
@@ -636,6 +656,96 @@ def create_manifest(context: RunContext[str], tool_info: Dict[str, Any] = None, 
         lsid_object = tool_name.lower().replace(' ', '').replace('.', '').replace('_', '')
         lsid = f"urn:lsid:genepattern.org:module.analysis:{lsid_object}:1"
 
+        # Convert planning_data parameters to manifest parameter format
+        manifest_parameters = {}
+        if planning_dict and 'parameters' in planning_dict and planning_dict['parameters']:
+            print(f"✓ Converting {len(planning_dict['parameters'])} parameters to manifest format")
+
+            for idx, param in enumerate(planning_dict['parameters'], start=1):
+                # Map planning parameter types to GenePattern manifest types
+                param_type = param.get('type', 'text').lower()
+
+                # Determine TYPE and type (java class)
+                if param_type == 'file':
+                    gp_TYPE = 'FILE'
+                    gp_type = 'java.io.File'
+                    gp_MODE = 'IN'
+                elif param_type == 'integer':
+                    gp_TYPE = 'Integer'
+                    gp_type = 'java.lang.Integer'
+                    gp_MODE = None
+                elif param_type == 'float' or param_type == 'floating point':
+                    gp_TYPE = 'Float'
+                    gp_type = 'java.lang.Float'
+                    gp_MODE = None
+                elif param_type == 'choice':
+                    gp_TYPE = 'TEXT'
+                    gp_type = 'java.lang.String'
+                    gp_MODE = None
+                else:  # text, string, or unknown
+                    gp_TYPE = 'TEXT'
+                    gp_type = 'java.lang.String'
+                    gp_MODE = None
+
+                # Build parameter object
+                manifest_param = {
+                    'name': param.get('name', f'param{idx}'),
+                    'description': param.get('description', ''),
+                    'TYPE': gp_TYPE,
+                    'type': gp_type,
+                }
+
+                # Add MODE for file parameters
+                if gp_MODE:
+                    manifest_param['MODE'] = gp_MODE
+
+                # Add optional flag
+                if not param.get('required', False):
+                    manifest_param['optional'] = 'on'
+
+                # Add default value if present
+                if 'default_value' in param and param['default_value']:
+                    manifest_param['default_value'] = str(param['default_value'])
+
+                # Add choices for choice parameters
+                if param_type == 'choice' and 'choices' in param and param['choices']:
+                    choices = param['choices']
+                    if isinstance(choices, list):
+                        # Convert list of choice objects to semicolon-separated values
+                        choice_values = []
+                        for choice in choices:
+                            if isinstance(choice, dict):
+                                choice_values.append(choice.get('value', str(choice)))
+                            else:
+                                choice_values.append(str(choice))
+                        manifest_param['value'] = ';'.join(choice_values)
+                    else:
+                        manifest_param['value'] = str(choices)
+
+                # Add file formats for file parameters
+                if param_type == 'file' and 'file_formats' in param and param['file_formats']:
+                    formats = param['file_formats']
+                    if isinstance(formats, list):
+                        manifest_param['fileFormat'] = ';'.join(formats)
+                    else:
+                        manifest_param['fileFormat'] = str(formats)
+
+                # Add prefix if present
+                if 'prefix' in param and param['prefix']:
+                    manifest_param['prefix_when_specified'] = param['prefix']
+
+                # Add numValues based on value_count
+                if 'value_count' in param and param['value_count']:
+                    manifest_param['numValues'] = param['value_count']
+                elif param.get('required', False):
+                    manifest_param['numValues'] = '1..1'
+                else:
+                    manifest_param['numValues'] = '0..1'
+
+                manifest_parameters[idx] = manifest_param
+
+            print(f"✓ Successfully converted {len(manifest_parameters)} parameters")
+
         # Return structured dictionary that can be converted to ManifestModel
         manifest_dict = {
             "name": tool_name,
@@ -654,7 +764,8 @@ def create_manifest(context: RunContext[str], tool_info: Dict[str, Any] = None, 
             "quality": "development",
             "job.cpuCount": str(cpu_cores),
             "job.memory": memory,
-            "artifact_report": f"Generated manifest for {tool_name} module with {len(command_line.split())} command components",
+            "parameters": manifest_parameters,  # Include the properly formatted parameters
+            "artifact_report": f"Generated manifest for {tool_name} module with {len(command_line.split())} command components and {len(manifest_parameters)} parameters",
             "artifact_status": "success"
         }
 

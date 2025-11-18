@@ -268,7 +268,7 @@ Examples:
     p.add_argument(
         "--cleanup", 
         action="store_true",
-        default=True,
+        default=False,
         help="Clean up built images after testing (default: true)"
     )
     return p.parse_args(argv)

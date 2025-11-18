@@ -458,7 +458,14 @@ Generate a complete, valid manifest file in key=value format."""
             except Exception as e:
                 error_report = f"Error generating {artifact_name}: {str(e)}"
                 self.logger.print_status(error_report, "ERROR")
-                status.artifacts_status[artifact_name]['errors'].append(error_report)
+
+                # Print full traceback for debugging
+                tb_str = traceback.format_exc()
+                self.logger.print_status(f"Full traceback:\n{tb_str}", "ERROR")
+
+                # Store both error message and traceback
+                full_error = f"{error_report}\n\nTraceback:\n{tb_str}"
+                status.artifacts_status[artifact_name]['errors'].append(full_error)
                 self.save_status(status, dev_mode)
 
                 if attempt == max_loops:
@@ -467,75 +474,82 @@ Generate a complete, valid manifest file in key=value format."""
         return False
 
     def validate_artifact(self, file_path: str, validate_tool: str) -> Dict[str, Any]:
-        """Validate an artifact using its agent's Pydantic AI validation tool"""
+        """Validate an artifact using its linter directly"""
         try:
             self.logger.print_status(f"Validating with {validate_tool}")
 
-            # Import the validation function directly from the respective agent
-            # Map validate_tool names to their agent modules and function names
-            validation_map = {
-                'validate_manifest': ('manifest.agent', 'validate_manifest'),
-                'validate_dockerfile': ('dockerfile.agent', 'validate_dockerfile'),
-                'validate_documentation': ('documentation.agent', 'validate_documentation'),
-                'validate_gpunit': ('gpunit.agent', 'validate_gpunit'),
-                'validate_paramgroups': ('paramgroups.agent', 'validate_paramgroups'),
-                'validate_wrapper': ('wrapper.agent', 'validate_wrapper'),
+            # Map validate_tool names to their linter modules
+            linter_map = {
+                'validate_manifest': 'manifest.linter',
+                'validate_dockerfile': 'dockerfile.linter',
+                'validate_documentation': 'documentation.linter',
+                'validate_gpunit': 'gpunit.linter',
+                'validate_paramgroups': 'paramgroups.linter',
+                'validate_wrapper': 'wrapper.linter',
             }
 
-            if validate_tool not in validation_map:
+            if validate_tool not in linter_map:
                 return {'success': False, 'error': f"Unknown validation tool: {validate_tool}"}
 
-            module_name, func_name = validation_map[validate_tool]
+            linter_module_name = linter_map[validate_tool]
 
-            # Import the validation function
+            # Import the linter module and call it directly
             import importlib
-            agent_module = importlib.import_module(module_name)
-            validate_func = getattr(agent_module, func_name)
+            import io
+            from contextlib import redirect_stdout, redirect_stderr
 
-            # Create a minimal RunContext for the validation tool
-            from pydantic_ai import RunContext
+            linter_module = importlib.import_module(linter_module_name)
 
-            # We need to create a proper context - the validation tools are decorated with @agent.tool
-            # which means they expect a RunContext. However, we can call them directly since they're
-            # just regular functions that happen to be registered as tools.
-            # Create a minimal context
-            ctx = RunContext(
-                deps=None,
-                retry=0,
-                messages=[],
-                model_settings=None
-            )
+            # Capture stdout and stderr
+            stdout_capture = io.StringIO()
+            stderr_capture = io.StringIO()
 
-            # Call the validation function directly
-            # The validation functions have signatures like: validate_manifest(ctx, path, ...)
-            output = validate_func(ctx, path=file_path)
+            try:
+                # Call the linter's main function with the file path
+                with redirect_stdout(stdout_capture), redirect_stderr(stderr_capture):
+                    exit_code = linter_module.main([file_path])
+
+                output = stdout_capture.getvalue()
+                errors = stderr_capture.getvalue()
+                full_output = output
+                if errors:
+                    full_output += f"\nErrors:\n{errors}"
+
+            except SystemExit as e:
+                # Some linters call sys.exit()
+                exit_code = e.code if e.code is not None else 0
+                output = stdout_capture.getvalue()
+                errors = stderr_capture.getvalue()
+                full_output = output
+                if errors:
+                    full_output += f"\nErrors:\n{errors}"
 
             # Look for explicit PASS/FAIL indicators from the linter
-            output_lower = output.lower()
+            output_lower = full_output.lower()
 
             # Check for explicit failure indicators first
-            if any(indicator in output_lower for indicator in [
+            if exit_code != 0 or any(indicator in output_lower for indicator in [
                 "fail:", "failed", "error:", "invalid json", "validation failed"
             ]):
                 # Print the full validation output for debugging
                 self.logger.print_status("Validation failed. Full validation output:", "ERROR")
-                print(output)  # Print full output directly without truncation
-                return {'success': False, 'error': output}
+                print(full_output)
+                return {'success': False, 'error': full_output}
 
-            # Check for explicit success indicators (expanded to catch more patterns)
+            # Check for explicit success indicators
             elif any(indicator in output_lower for indicator in [
                 "pass:", "passed", "validation passed", "has passed", "**passed**",
                 "successfully", "validation successful", "all checks passed"
             ]):
                 self.logger.print_status("✅ Validation passed", "SUCCESS")
-                return {'success': True, 'result': output}
+                return {'success': True, 'result': full_output}
 
             # If we can't determine success/failure clearly, default to failure for safety
             else:
                 self.logger.print_status(f"Ambiguous validation result, defaulting to failure", "WARNING")
                 self.logger.print_status("Full validation output:", "WARNING")
-                print(output)  # Print full output directly
-                return {'success': False, 'error': f"Ambiguous validation result: {output}"}
+                print(full_output)
+                return {'success': False, 'error': f"Ambiguous validation result: {full_output}"}
 
         except Exception as e:
             error_msg = f"Validation error: {str(e)}"
