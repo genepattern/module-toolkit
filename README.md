@@ -20,11 +20,12 @@ The `generate-module.py` script orchestrates multiple AI agents to:
    ```
 
 2. **Environment Variables**:
-   Edit .env with your API keys and preferences
+   The default values for the environment variables should be fine for most installations. However, if you wish to
+   make changes, you may want to edit an .env with your API keys and preferences
 
-3. **Required Environment Variables**:
-   - `DEFAULT_LLM_MODEL`: LLM model for agents (default: Claude Sonnet 4)
-   - `BRAVE_API_KEY`: For web research (optional but recommended)
+4. **Environment Variables**:
+   - `DEFAULT_LLM_MODEL`: LLM model for agents (default: Qwen3)
+   - `BRAVE_API_KEY`: For web research (optional but recommended if you have one)
    - `MAX_ARTIFACT_LOOPS`: Max validation retry attempts (default: 5)
    - `MODULE_OUTPUT_DIR`: Output directory (default: ./generated-modules)
 
