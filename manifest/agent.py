@@ -22,13 +22,15 @@ parameter definitions. The create_manifest tool will automatically convert param
 the planning data into the proper GenePattern manifest format.
 
 Key requirements for GenePattern module manifests:
-- Include all required keys: LSID, name, commandLine
+- Include all required keys: LSID, name, commandLine, job.docker.image
 - Generate valid LSIDs following urn:lsid format
 - Create clear, descriptive module names and descriptions
 - Design proper command line templates with parameter placeholders
 - Set appropriate module categories and properties
 - Include complete parameter definitions with proper types and constraints
 - Follow GenePattern naming conventions and best practices
+- ALWAYS include job.docker.image from the planning data's docker_image_tag field
+- The colon in docker image tags MUST be escaped with a backslash (e.g., job.docker.image=genepattern/salmon\\:1)
 
 Manifest Key Guidelines:
 - LSID: Must follow format urn:lsid:authority:namespace:object:revision
@@ -38,6 +40,7 @@ Manifest Key Guidelines:
 - version: Semantic version (e.g., 1.0.0)
 - author: Module author information
 - categories: Semicolon-separated category list
+- job.docker.image: Docker image tag from planning data (REQUIRED, escape colon with backslash)
 
 Parameter Definition Guidelines:
 - Each parameter is defined with a numeric index (p1, p2, p3, etc.)
@@ -746,6 +749,19 @@ def create_manifest(context: RunContext[str], tool_info: Dict[str, Any] = None, 
 
             print(f"✓ Successfully converted {len(manifest_parameters)} parameters")
 
+        # Extract docker_image_tag from planning_data (REQUIRED)
+        docker_image_tag = planning_dict.get('docker_image_tag', '')
+        if docker_image_tag:
+            # Escape the colon in the docker tag for manifest format
+            docker_image_escaped = docker_image_tag.replace(':', '\\:')
+            print(f"✓ Using docker_image_tag from planning_data: {docker_image_tag} (escaped: {docker_image_escaped})")
+        else:
+            # Generate a fallback docker tag if not provided
+            normalized_name = re.sub(r'[^a-z0-9]', '', tool_name.lower())
+            docker_image_tag = f"genepattern/{normalized_name}:{tool_version}"
+            docker_image_escaped = docker_image_tag.replace(':', '\\:')
+            print(f"⚠️ docker_image_tag not in planning_data, using fallback: {docker_image_tag}")
+
         # Return structured dictionary that can be converted to ManifestModel
         manifest_dict = {
             "name": tool_name,
@@ -764,6 +780,7 @@ def create_manifest(context: RunContext[str], tool_info: Dict[str, Any] = None, 
             "quality": "development",
             "job.cpuCount": str(cpu_cores),
             "job.memory": memory,
+            "job.docker.image": docker_image_escaped,  # Docker image tag with escaped colon
             "parameters": manifest_parameters,  # Include the properly formatted parameters
             "artifact_report": f"Generated manifest for {tool_name} module with {len(command_line.split())} command components and {len(manifest_parameters)} parameters",
             "artifact_status": "success"

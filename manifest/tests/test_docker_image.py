@@ -2,8 +2,8 @@
 """
 Test for Docker image field validation.
 
-This test ensures that the job.docker.image field, if present, follows
-a reasonable format for Docker image names.
+This test ensures that the job.docker.image field is present and follows
+a reasonable format for Docker image names. This is a REQUIRED field.
 """
 from __future__ import annotations
 
@@ -33,6 +33,10 @@ def run_test(lines: List[str]) -> List[LintIssue]:
         List of LintIssue objects for any Docker image format violations
     """
     issues: List[LintIssue] = []
+    docker_image_found = False
+    docker_image_value = None
+    docker_image_line = None
+    docker_image_idx = None
 
     for idx, raw_line in enumerate(lines, start=1):
         line = raw_line.rstrip("\n")
@@ -55,13 +59,33 @@ def run_test(lines: List[str]) -> List[LintIssue]:
             continue
 
         # Check job.docker.image field
-        if key == "job.docker.image" and value:
-            if not DOCKER_IMAGE_REGEX.match(value):
-                issues.append(LintIssue(
-                    "WARNING",
-                    f"Docker image name '{value}' may not follow standard format. Expected format: [registry/]name[:tag]",
-                    idx,
-                    line,
-                ))
+        if key == "job.docker.image":
+            docker_image_found = True
+            docker_image_value = value
+            docker_image_line = line
+            docker_image_idx = idx
+
+    # Check if job.docker.image is present (REQUIRED)
+    if not docker_image_found:
+        issues.append(LintIssue(
+            "ERROR",
+            "Missing required field 'job.docker.image'. This field must specify the Docker image tag for the module (e.g., job.docker.image=genepattern/mymodule\\:1)",
+            None,
+            None,
+        ))
+    elif not docker_image_value:
+        issues.append(LintIssue(
+            "ERROR",
+            "Field 'job.docker.image' is present but empty. Must specify a valid Docker image tag.",
+            docker_image_idx,
+            docker_image_line,
+        ))
+    elif not DOCKER_IMAGE_REGEX.match(docker_image_value):
+        issues.append(LintIssue(
+            "WARNING",
+            f"Docker image name '{docker_image_value}' may not follow standard format. Expected format: [registry/]name[:tag] (colon should be escaped as \\:)",
+            docker_image_idx,
+            docker_image_line,
+        ))
 
     return issues

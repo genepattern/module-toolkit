@@ -60,6 +60,32 @@ Always carefully review and incorporate any user-provided instructions into your
 - **LSID Format**: urn:lsid:broad.mit.edu:cancer.software.genepattern.module.analysis:<5-digit-id>:<version>
   Example: urn:lsid:broad.mit.edu:cancer.software.genepattern.module.analysis:00123:1
 
+**Docker Image Tag Convention:**
+- **docker_image_tag**: Must be in format `genepattern/<module_name>:<version>`
+- The module_name portion must be normalized: lowercase, alphanumeric characters only (no dots, hyphens, underscores, or special characters)
+- The version should match the GenePattern module version (e.g., 1, 2, 3.1)
+- Examples: 
+  - Module "Salmon.Quant" version 1 -> docker_image_tag: "genepattern/salmonquant:1"
+  - Module "DESeq2" version 2.1 -> docker_image_tag: "genepattern/deseq2:2.1"
+  - Module "STAR-Fusion" version 3 -> docker_image_tag: "genepattern/starfusion:3"
+
+**CRITICAL: Command Line Requirements**
+The `command_line` field MUST include ALL parameters defined in the `parameters` list, even if those 
+parameters are marked as optional. This is because:
+- Optional parameters are optional for the USER to fill out, not optional for the command line template
+- If the user doesn't fill an optional parameter, GenePattern passes it to the wrapper as an empty string
+- The wrapper script must receive all parameter placeholders so it can handle them appropriately
+
+Command line format rules:
+- Each parameter must appear as a placeholder: <parameter.name>
+- If prefix_only_if_value=False: include "prefix <parameter.name>" (e.g., "--input <input.file>")
+- If prefix_only_if_value=True: include only "<parameter.name>" (GenePattern adds prefix conditionally)
+- Use the generate_command_line tool to ensure all parameters are included correctly
+- Use the validate_command_line tool to verify the command line includes all parameters
+
+Example with 3 parameters (input.file, output.format, threads):
+  command_line: "python wrapper.py <input.file> --format <output.format> --threads <threads>"
+
 **Planning Methodology:**
 1. Research the tool thoroughly using available resources
 2. Analyze command-line interface and configuration options
@@ -68,6 +94,7 @@ Always carefully review and incorporate any user-provided instructions into your
 5. Design intuitive parameter groupings following GenePattern conventions
 6. Plan comprehensive testing and validation
 7. Create detailed implementation roadmap
+8. **ALWAYS use generate_command_line tool to create the command_line field**
 
 **Primary Output Format:**
 Your main planning function should return structured data as a ModulePlan Pydantic model containing:
@@ -75,8 +102,9 @@ Your main planning function should return structured data as a ModulePlan Pydant
 - Input file formats and categories
 - Resource requirements (CPU cores, memory)
 - Full unstructured plan text alongside structured data
-- Wrapper script name and example command line
+- Wrapper script name and example command line (MUST include ALL parameters)
 - Detailed parameter specifications with types, prefixes, constraints
+- Docker image tag (genepattern/<normalized_module_name>:<version>)
 
 Always prioritize comprehensive parameter analysis, accurate technical specifications, strict 
 adherence to GenePattern naming conventions, and MOST IMPORTANTLY, faithful implementation of 
@@ -867,3 +895,186 @@ def validate_module_plan(context: RunContext[ModulePlan], plan: ModulePlan) -> s
     print(f"✅ PLANNER TOOL: validate_module_plan completed - {'VALID' if not all_issues else 'ISSUES FOUND'}")
     return report
 
+
+@planner_agent.tool
+def validate_command_line(context: RunContext[ModulePlan], command_line: str, parameters: list, wrapper_script: str = "wrapper.py") -> str:
+    """
+    Validate that a command line includes ALL parameters from the module definition.
+
+    In GenePattern, the command line MUST include ALL parameters, even optional ones.
+    Optional parameters are optional for the USER to fill out - if not filled, they are
+    passed to the wrapper script as empty strings. The command line template must still
+    include placeholders for all parameters.
+
+    Args:
+        command_line: The proposed command line string
+        parameters: List of parameter dictionaries with 'name', 'prefix', and 'prefix_only_if_value' keys
+        wrapper_script: Name of the wrapper script (default: wrapper.py)
+
+    Returns:
+        Validation report with missing parameters and a corrected command line if needed
+    """
+    print(f"🔍 PLANNER TOOL: Running validate_command_line")
+
+    report = "Command Line Validation Report\n"
+    report += "=" * 50 + "\n\n"
+
+    if not parameters:
+        report += "⚠️  No parameters provided for validation\n"
+        return report
+
+    # Extract parameter names from the parameters list
+    param_names = []
+    param_info = {}
+    for param in parameters:
+        if isinstance(param, dict):
+            name = param.get('name', '')
+            prefix = param.get('prefix', '')
+            prefix_only_if_value = param.get('prefix_only_if_value', False)
+        else:
+            # Handle Parameter objects
+            name = getattr(param, 'name', '')
+            prefix = getattr(param, 'prefix', '')
+            prefix_only_if_value = getattr(param, 'prefix_only_if_value', False)
+
+        if name:
+            param_names.append(name)
+            param_info[name] = {
+                'prefix': prefix,
+                'prefix_only_if_value': prefix_only_if_value
+            }
+
+    # Check which parameters are missing from the command line
+    missing_params = []
+    present_params = []
+
+    for param_name in param_names:
+        # GenePattern uses <param_name> syntax for parameter placeholders
+        placeholder = f"<{param_name}>"
+        if placeholder in command_line:
+            present_params.append(param_name)
+        else:
+            missing_params.append(param_name)
+
+    # Generate report
+    if not missing_params:
+        report += "✅ **Status: VALID**\n\n"
+        report += f"Command line includes all {len(param_names)} parameters.\n\n"
+    else:
+        report += "❌ **Status: INVALID - MISSING PARAMETERS**\n\n"
+        report += f"**Missing Parameters ({len(missing_params)}):**\n"
+        for param in missing_params:
+            info = param_info.get(param, {})
+            prefix = info.get('prefix', '')
+            report += f"  - {param} (prefix: '{prefix}')\n"
+        report += "\n"
+
+        report += f"**Present Parameters ({len(present_params)}):**\n"
+        for param in present_params:
+            report += f"  - {param}\n"
+        report += "\n"
+
+    # Generate the correct command line
+    report += "**Correct Command Line Format:**\n"
+    report += "```\n"
+
+    # Build correct command line with all parameters
+    correct_cmd_parts = [f"python {wrapper_script}"]
+
+    for param_name in param_names:
+        info = param_info.get(param_name, {})
+        prefix = info.get('prefix', '')
+        prefix_only_if_value = info.get('prefix_only_if_value', False)
+
+        placeholder = f"<{param_name}>"
+
+        if prefix_only_if_value:
+            # If prefix_only_if_value is True, we only include the value (prefix is added conditionally by GenePattern)
+            correct_cmd_parts.append(placeholder)
+        elif prefix:
+            # Include prefix followed by placeholder
+            correct_cmd_parts.append(f"{prefix} {placeholder}")
+        else:
+            # No prefix, just the placeholder
+            correct_cmd_parts.append(placeholder)
+
+    correct_command_line = " ".join(correct_cmd_parts)
+    report += correct_command_line + "\n"
+    report += "```\n\n"
+
+    report += "**Important Notes:**\n"
+    report += "- ALL parameters MUST be included in the command line, even optional ones\n"
+    report += "- Optional parameters are optional for the USER, not for the command line\n"
+    report += "- If user doesn't fill an optional parameter, it's passed as empty string\n"
+    report += "- Parameter placeholders use format: <parameter.name>\n"
+    report += "- When prefix_only_if_value=True, the prefix is added by GenePattern only when value is provided\n"
+    report += "- When prefix_only_if_value=False, always include 'prefix <value>' in command line\n"
+
+    print(f"✅ PLANNER TOOL: validate_command_line completed - {'VALID' if not missing_params else f'MISSING {len(missing_params)} PARAMS'}")
+    return report
+
+
+@planner_agent.tool
+def generate_command_line(context: RunContext[ModulePlan], wrapper_script: str, parameters: list) -> str:
+    """
+    Generate a complete GenePattern command line that includes ALL parameters.
+
+    This tool generates the proper command line format for a GenePattern module,
+    ensuring that every parameter is included. In GenePattern, ALL parameters must
+    appear in the command line - optional parameters are optional for users to fill,
+    but must still be present in the command template.
+
+    Args:
+        wrapper_script: Name of the wrapper script (e.g., 'wrapper.py', 'run_tool.R')
+        parameters: List of parameter dictionaries or Parameter objects
+
+    Returns:
+        A complete command line string with all parameter placeholders
+    """
+    print(f"🔧 PLANNER TOOL: Running generate_command_line for {wrapper_script} with {len(parameters)} parameters")
+
+    if not parameters:
+        return f"python {wrapper_script}"
+
+    # Determine script invocation based on extension
+    if wrapper_script.endswith('.py'):
+        cmd_parts = [f"python {wrapper_script}"]
+    elif wrapper_script.endswith('.R'):
+        cmd_parts = [f"Rscript {wrapper_script}"]
+    elif wrapper_script.endswith('.sh'):
+        cmd_parts = [f"bash {wrapper_script}"]
+    else:
+        cmd_parts = [wrapper_script]
+
+    # Add each parameter to the command line
+    for param in parameters:
+        if isinstance(param, dict):
+            name = param.get('name', '')
+            prefix = param.get('prefix', '')
+            prefix_only_if_value = param.get('prefix_only_if_value', False)
+        else:
+            # Handle Parameter objects
+            name = getattr(param, 'name', '')
+            prefix = getattr(param, 'prefix', '')
+            prefix_only_if_value = getattr(param, 'prefix_only_if_value', False)
+
+        if not name:
+            continue
+
+        placeholder = f"<{name}>"
+
+        if prefix_only_if_value:
+            # When prefix_only_if_value is True, GenePattern handles the prefix conditionally
+            # We just include the placeholder
+            cmd_parts.append(placeholder)
+        elif prefix:
+            # Include prefix followed by placeholder
+            cmd_parts.append(f"{prefix} {placeholder}")
+        else:
+            # No prefix, just the placeholder
+            cmd_parts.append(placeholder)
+
+    command_line = " ".join(cmd_parts)
+
+    print(f"✅ PLANNER TOOL: generate_command_line completed: {command_line[:100]}...")
+    return command_line

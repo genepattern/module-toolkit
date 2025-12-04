@@ -438,8 +438,37 @@ Generate a complete, valid manifest file in key=value format."""
                 self.logger.print_status(f"Generated {filename}")
                 self.save_status(status, dev_mode)
 
-                # Validate using MCP server
-                validation_result = self.validate_artifact(str(file_path), validate_tool)
+                # Prepare extra validation arguments based on artifact type
+                extra_validation_args = None
+                if artifact_name == 'dockerfile':
+                    # Pass the docker image tag from planning data to the dockerfile linter
+                    docker_tag = planning_data_dict.get('docker_image_tag', '')
+                    if docker_tag:
+                        extra_validation_args = ['-t', docker_tag]
+                        self.logger.print_status(f"Using docker tag for build: {docker_tag}")
+                elif artifact_name == 'gpunit':
+                    # Pass the module name and parameters to the gpunit linter for validation
+                    extra_validation_args = []
+                    module_name = planning_data_dict.get('module_name', '')
+                    if module_name:
+                        extra_validation_args.extend(['--module', module_name])
+                        self.logger.print_status(f"Using module name for gpunit validation: {module_name}")
+                    
+                    # Extract parameter names from planning data
+                    parameters = planning_data_dict.get('parameters', [])
+                    if parameters:
+                        param_names = [p.get('name', '') for p in parameters if p.get('name')]
+                        if param_names:
+                            extra_validation_args.append('--parameters')
+                            extra_validation_args.extend(param_names)
+                            self.logger.print_status(f"Using {len(param_names)} parameters for gpunit validation")
+                    
+                    # Only set extra_validation_args if we have something to pass
+                    if not extra_validation_args:
+                        extra_validation_args = None
+
+                # Validate using linter
+                validation_result = self.validate_artifact(str(file_path), validate_tool, extra_validation_args)
 
                 if validation_result['success']:
                     status.artifacts_status[artifact_name]['validated'] = True
@@ -473,8 +502,14 @@ Generate a complete, valid manifest file in key=value format."""
 
         return False
 
-    def validate_artifact(self, file_path: str, validate_tool: str) -> Dict[str, Any]:
-        """Validate an artifact using its linter directly"""
+    def validate_artifact(self, file_path: str, validate_tool: str, extra_args: List[str] = None) -> Dict[str, Any]:
+        """Validate an artifact using its linter directly
+
+        Args:
+            file_path: Path to the artifact file to validate
+            validate_tool: Name of the validation tool to use
+            extra_args: Additional command line arguments to pass to the linter
+        """
         try:
             self.logger.print_status(f"Validating with {validate_tool}")
 
@@ -505,9 +540,14 @@ Generate a complete, valid manifest file in key=value format."""
             stderr_capture = io.StringIO()
 
             try:
-                # Call the linter's main function with the file path
+                # Build argument list - file path plus any extra args
+                linter_args = [file_path]
+                if extra_args:
+                    linter_args.extend(extra_args)
+
+                # Call the linter's main function with the arguments
                 with redirect_stdout(stdout_capture), redirect_stderr(stderr_capture):
-                    exit_code = linter_module.main([file_path])
+                    exit_code = linter_module.main(linter_args)
 
                 output = stdout_capture.getvalue()
                 errors = stderr_capture.getvalue()

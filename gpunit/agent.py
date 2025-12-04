@@ -650,11 +650,13 @@ def create_gpunit(context: RunContext[str], tool_info: Dict[str, Any], planning_
 
         for param in parameters:
             param_name = param.get('name', 'unknown')
-            param_type = param.get('type', 'Text')
+            param_type = param.get('type', 'text')
+            # Normalize param_type to lowercase for case-insensitive comparison
+            param_type_lower = param_type.lower() if isinstance(param_type, str) else 'text'
             param_desc = param.get('description', '')
 
             # Generate sample values based on parameter type with format awareness
-            if param_type == 'File':
+            if param_type_lower == 'file':
                 # Use input_file_formats for file parameters
                 if 'input' in param_name.lower():
                     test_params[param_name] = f"test_data/sample_input.{primary_extension}"
@@ -670,7 +672,7 @@ def create_gpunit(context: RunContext[str], tool_info: Dict[str, Any], planning_
                 else:
                     test_params[param_name] = f"test_data/sample.{primary_extension}"
 
-            elif param_type == 'Choice':
+            elif param_type_lower == 'choice':
                 choices = param.get('choices', ['default'])
                 # Extract actual choice values if they're ChoiceOption objects
                 if choices and isinstance(choices[0], dict):
@@ -679,7 +681,7 @@ def create_gpunit(context: RunContext[str], tool_info: Dict[str, Any], planning_
                     test_params[param_name] = choices[0] if choices else 'default'
                 test_description_hints.append(f"choice: {test_params[param_name]}")
 
-            elif param_type == 'Integer':
+            elif param_type_lower == 'integer':
                 # Use cpu_cores for thread/core related parameters
                 if any(keyword in param_name.lower() for keyword in ['thread', 'core', 'cpu', 'proc']):
                     test_params[param_name] = str(min(cpu_cores, 2))  # Use planning cores but cap for tests
@@ -687,11 +689,16 @@ def create_gpunit(context: RunContext[str], tool_info: Dict[str, Any], planning_
                 else:
                     test_params[param_name] = param.get('default_value', '10')
 
-            elif param_type == 'Float':
+            elif param_type_lower == 'float':
                 test_params[param_name] = param.get('default_value', '0.05')
 
-            else:  # Text/String
+            else:  # Text/String or any other type
                 test_params[param_name] = param.get('default_value', 'test_value')
+
+        # Ensure params is never empty - add a default parameter if needed
+        if not test_params:
+            print("⚠️  No parameters found, adding default input.file parameter")
+            test_params['input.file'] = f"test_data/sample.{primary_extension}"
 
         # Generate test name from description or tool name
         test_scenario = "Basic Functionality Test"

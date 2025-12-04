@@ -64,6 +64,7 @@ class ModulePlan(BaseModel):
     wrapper_script: str = Field(description="The name of the wrapper script")
     command_line: str = Field(description="Example command line for calling the wrapper script")
     parameters: List[Parameter] = Field(description="List of parameters to expose")
+    docker_image_tag: str = Field(description="Docker image tag in format genepattern/<module_name>:<version> where module_name is lowercase alphanumeric only")
 
 
 class ArtifactModel(BaseModel):
