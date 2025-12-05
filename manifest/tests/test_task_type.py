@@ -34,7 +34,8 @@ def run_test(lines: List[str]) -> List[LintIssue]:
         List of LintIssue objects for any taskType field violations
     """
     issues: List[LintIssue] = []
-
+    taskType_found = False
+    
     for idx, raw_line in enumerate(lines, start=1):
         line = raw_line.rstrip("\n")
         stripped = line.strip()
@@ -59,7 +60,16 @@ def run_test(lines: List[str]) -> List[LintIssue]:
         if key == "taskType" and value:
             # This is informational - we don't error on unusual values
             # since task types can be custom
+            taskType_found = True
             pass
+
+    if not taskType_found:
+        issues.append(LintIssue(
+            "ERROR",
+            "Manifest must declare a taskType field with a non-empty value",
+            0,
+            "(taskType field missing)",
+        ))
 
     return issues
 
