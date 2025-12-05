@@ -40,6 +40,8 @@ Best Practices:
 - Hide complex/advanced groups by default (hidden: true)
 - Ensure every parameter appears in exactly one group
 - Order groups by typical workflow sequence
+- have at most 5 Paramgroups
+- Limit parameters per group to 10 or fewer for usability
 
 REMEMBER: Output ONLY valid JSON. No explanations, no markdown, no additional text.
 """

@@ -213,6 +213,23 @@ def run_test(script_path: str, shared_context: dict) -> List[LintIssue]:
     script_type = shared_context.get('script_type')
 
     if script_content is None:
+        # read content from file as fallback
+        # and then store in shared_context for future tests
+        try:
+            with open(script_path, 'r', encoding='utf-8') as f:
+                script_content = f.read()
+            shared_context['script_content'] = script_content
+        except Exception as e:
+            issues.append(LintIssue(
+                "ERROR",
+                f"Cannot read script content: {str(e)}",
+                "File must be accessible for command structure check"
+            ))
+            return issues
+        
+
+
+    if script_content is None:
         issues.append(LintIssue(
             "ERROR",
             "Cannot validate command structure: script content not available",

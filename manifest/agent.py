@@ -36,7 +36,7 @@ Manifest Key Guidelines:
 - LSID: Must follow format urn:lsid:authority:namespace:object:revision
 - name: Clear, descriptive module name (use dots/underscores as needed)
 - description: Concise explanation of module purpose and functionality
-- commandLine: Template with parameter placeholders like <input.file>
+- commandLine: Template with parameter placeholders like <input.file>.  The command line should have placeholders for every parameter defined in the manifest.
 - version: Semantic version (e.g., 1.0.0)
 - author: Module author information
 - categories: Semicolon-separated category list

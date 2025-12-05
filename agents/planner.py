@@ -812,6 +812,98 @@ def validate_lsid_format(context: RunContext[ModulePlan], lsid: str) -> str:
 
 
 @planner_agent.tool
+def validate_command_line(context: RunContext[ModulePlan], plan: ModulePlan) -> str:
+    """
+    Validate that all parameter names appear in the module's command line.
+
+    Args:
+        plan: The ModulePlan object containing parameters and command_line
+
+    Returns:
+        Validation report showing which parameters are present or missing from command line
+    """
+    print(f"🔍 PLANNER TOOL: Running validate_command_line for '{plan.module_name}'")
+
+    report = f"Command Line Validation Report: {plan.module_name}\n"
+    report += "=" * 50 + "\n\n"
+
+    if not plan.command_line:
+        report += "❌ **Status: INVALID**\n\n"
+        report += "**Issue:** No command line specified in the module plan.\n"
+        print("❌ PLANNER TOOL: validate_command_line failed - no command line specified")
+        return report
+
+    if not plan.parameters:
+        report += "⚠️  **Status: NO PARAMETERS**\n\n"
+        report += "**Issue:** Module has no parameters to validate.\n"
+        print("⚠️  PLANNER TOOL: validate_command_line - no parameters to validate")
+        return report
+
+    report += f"**Command Line:**\n{plan.command_line}\n\n"
+
+    missing_params = []
+    found_params = []
+
+    # Check each parameter name in the command line
+    for param in plan.parameters:
+        param_name = param.name
+        # Check if parameter name appears in command line (allowing for variations with underscores/hyphens)
+        # Also check for the parameter with prefix
+        name_variants = [
+            param_name,
+            param_name.replace('.', '_'),
+            param_name.replace('.', '-'),
+            param_name.replace('_', '.'),
+            param_name.replace('-', '.')
+        ]
+        
+        # Also check with prefix if available
+        if param.prefix:
+            name_variants.append(param.prefix)
+        
+        found = any(variant in plan.command_line for variant in name_variants)
+        
+        if found:
+            found_params.append(param_name)
+        else:
+            missing_params.append(param_name)
+
+    # Generate report
+    if not missing_params:
+        report += "✅ **Status: VALID**\n\n"
+        report += f"All {len(plan.parameters)} parameters appear in the command line.\n\n"
+    else:
+        report += "❌ **Status: ISSUES FOUND**\n\n"
+        report += f"**Missing Parameters ({len(missing_params)}):**\n"
+        for param_name in missing_params:
+            report += f"  - {param_name}\n"
+        report += "\n"
+
+    if found_params:
+        report += f"**Found Parameters ({len(found_params)}):**\n"
+        for param_name in found_params:
+            report += f"  - {param_name}\n"
+        report += "\n"
+
+    report += "**Summary:**\n"
+    report += f"  - Total parameters: {len(plan.parameters)}\n"
+    report += f"  - Found in command line: {len(found_params)}\n"
+    report += f"  - Missing from command line: {len(missing_params)}\n\n"
+
+    if missing_params:
+        report += "**Recommendations:**\n"
+        report += "  - Ensure wrapper script accepts all defined parameters\n"
+        report += "  - Update command line example to show parameter usage\n"
+        report += "  - Verify parameter names match between definition and implementation\n"
+
+    print(f"✅ PLANNER TOOL: validate_command_line completed - {len(missing_params)}  parameters missing from command line")
+   
+    print(f"\n\n{report}\n\n")
+     
+    return report
+
+
+@planner_agent.tool
 def validate_module_plan(context: RunContext[ModulePlan], plan: ModulePlan) -> str:
     """
     Validate a complete ModulePlan against all GenePattern conventions.
@@ -844,6 +936,13 @@ def validate_module_plan(context: RunContext[ModulePlan], plan: ModulePlan) -> s
 
     if param_issues:
         all_issues.append(f"Invalid parameter names: {', '.join(param_issues)}")
+
+    # Validate command line contains all parameters
+    cmdline_result = validate_command_line(context, plan)
+    cmdline_has_issues = "ISSUES FOUND" in cmdline_result
+    if cmdline_has_issues:
+        # Extract missing parameter count from the result
+        all_warnings.append("Some parameters are missing from the command line example")
 
     # Check for other potential issues
     if not plan.description or len(plan.description) < 10:
@@ -889,6 +988,7 @@ def validate_module_plan(context: RunContext[ModulePlan], plan: ModulePlan) -> s
     report += "**Detailed Validation Results:**\n"
     report += f"  - Module name: {'✅ Valid' if 'INVALID' not in module_name_result else '❌ Invalid'}\n"
     report += f"  - Parameter names: {'✅ All valid' if not param_issues else f'❌ {len(param_issues)} invalid'}\n"
+    report += f"  - Command line: {'✅ All parameters present' if not cmdline_has_issues else '⚠️  Some parameters missing'}\n"
     report += f"  - Description: {'✅ Present' if plan.description and len(plan.description) >= 10 else '⚠️  Needs improvement'}\n"
     report += f"  - Author: {'✅ Specified' if plan.author and plan.author != 'Unknown' else '⚠️  Not specified'}\n"
 
