@@ -26,6 +26,10 @@ COMMON_PARAM_ATTRIBUTES = {"name", "description", "optional"}
 VALID_MODES = {"IN", "OUT", ""}
 VALID_TYPES = {"FILE", "TEXT", ""}
 
+NUMVALUES_INT_PATTERN = re.compile(r"^-?\d+$")
+NUMVALUES_RANGE_PATTERN = re.compile(r"^(-?\d+)\.\.(-?\d+)$")
+NUMVALUES_MIN_PATTERN = re.compile(r"^(-?\d+)\+$")
+
 
 def run_test(lines: List[str]) -> List[LintIssue]:
     """
@@ -74,6 +78,7 @@ def run_test(lines: List[str]) -> List[LintIssue]:
     # Validate each parameter
     for param_num in sorted(params.keys()):
         param_attrs = params[param_num]
+        is_file_param = _is_file_parameter(param_attrs)
 
         # Check for required attributes
         missing_attrs = COMMON_PARAM_ATTRIBUTES - set(param_attrs.keys())
@@ -118,5 +123,43 @@ def run_test(lines: List[str]) -> List[LintIssue]:
                         line_text,
                     ))
 
+        if is_file_param:
+            if "numValues" not in param_attrs:
+                issues.append(LintIssue(
+                    "WARNING",
+                    f"Parameter p{param_num} is a file type but is missing required attribute 'numValues'",
+                    None,
+                    None,
+                ))
+            else:
+                num_values_value, line_no, line_text = param_attrs["numValues"]
+                if not _is_valid_numvalues(num_values_value):
+                    issues.append(LintIssue(
+                        "WARNING",
+                        f"Parameter p{param_num} has numValues '{num_values_value}'. Expected an integer, range like '0..4', or minimum like '1+'",
+                        line_no,
+                        line_text,
+                    ))
+
     return issues
 
+
+def _is_file_parameter(attrs: Dict[str, tuple]) -> bool:
+    if "type" in attrs and attrs["type"][0] == "java.io.File":
+        return True
+    if "TYPE" in attrs and attrs["TYPE"][0] == "FILE":
+        return True
+    return False
+
+
+def _is_valid_numvalues(value: str) -> bool:
+    if NUMVALUES_INT_PATTERN.fullmatch(value):
+        return True
+    range_match = NUMVALUES_RANGE_PATTERN.fullmatch(value)
+    if range_match:
+        start = int(range_match.group(1))
+        end = int(range_match.group(2))
+        return start <= end
+    if NUMVALUES_MIN_PATTERN.fullmatch(value):
+        return True
+    return False
