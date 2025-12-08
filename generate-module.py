@@ -41,6 +41,10 @@ from gpunit.agent import gpunit_agent
 MAX_ARTIFACT_LOOPS = int(os.getenv('MAX_ARTIFACT_LOOPS', '5'))
 DEFAULT_OUTPUT_DIR = os.getenv('MODULE_OUTPUT_DIR', './generated-modules')
 
+# Token cost configuration (cost per 1000 tokens)
+INPUT_TOKEN_COST_PER_1000 = float(os.getenv('INPUT_TOKEN_COST_PER_1000', '0.003'))
+OUTPUT_TOKEN_COST_PER_1000 = float(os.getenv('OUTPUT_TOKEN_COST_PER_1000', '0.015'))
+
 
 class Logger:
     """Logging and display utilities for the module generation process."""
@@ -69,6 +73,9 @@ class ModuleGenerationStatus:
     planning_data: ModulePlan = None
     artifacts_status: Dict[str, Dict[str, Any]] = None
     error_messages: List[str] = None
+    # Token tracking fields
+    input_tokens: int = 0
+    output_tokens: int = 0
 
     def __post_init__(self):
         if self.artifacts_status is None: self.artifacts_status = {}
@@ -90,6 +97,23 @@ class ModuleGenerationStatus:
         """Return parameters from planning_data if available"""
         return self.planning_data.parameters if self.planning_data else []
 
+    def add_usage(self, result) -> None:
+        """Add token usage from an agent result to the running totals"""
+        try:
+            usage = result.usage()
+            if usage:
+                self.input_tokens += usage.request_tokens or 0
+                self.output_tokens += usage.response_tokens or 0
+        except Exception:
+            # If usage tracking fails, continue without crashing
+            pass
+
+    def get_estimated_cost(self) -> float:
+        """Calculate estimated cost based on token usage"""
+        input_cost = (self.input_tokens / 1000) * INPUT_TOKEN_COST_PER_1000
+        output_cost = (self.output_tokens / 1000) * OUTPUT_TOKEN_COST_PER_1000
+        return input_cost + output_cost
+
     def to_dict(self) -> Dict[str, Any]:
         """Convert status to a JSON-serializable dictionary"""
         data: Dict[str, Any] = {
@@ -100,6 +124,9 @@ class ModuleGenerationStatus:
             'research_data': self.research_data,
             'artifacts_status': self.artifacts_status,
             'error_messages': self.error_messages,
+            'input_tokens': self.input_tokens,
+            'output_tokens': self.output_tokens,
+            'estimated_cost': self.get_estimated_cost(),
         }
 
         # Serialize planning_data if present (it's a Pydantic model)
@@ -213,14 +240,16 @@ class ModuleAgent:
             if data.get('planning_data') and data['planning_data']:
                 planning_data = ModulePlan(**data['planning_data'])
 
-            # Create status object
+            # Create status object with token counts
             status = ModuleGenerationStatus(
                 tool_name=data['tool_name'],
                 module_directory=data['module_directory'],
                 research_data=data.get('research_data'),
                 planning_data=planning_data,
                 artifacts_status=data.get('artifacts_status', {}),
-                error_messages=data.get('error_messages', [])
+                error_messages=data.get('error_messages', []),
+                input_tokens=data.get('input_tokens', 0),
+                output_tokens=data.get('output_tokens', 0)
             )
 
             self.logger.print_status(f"Loaded status from {status_path}")
@@ -229,7 +258,7 @@ class ModuleAgent:
         except Exception as e:
             raise ValueError(f"Failed to load status.json: {str(e)}")
 
-    def do_research(self, tool_info: Dict[str, str]) -> Tuple[bool, Dict[str, Any]]:
+    def do_research(self, tool_info: Dict[str, str], status: ModuleGenerationStatus = None, dev_mode: bool = False) -> Tuple[bool, Dict[str, Any]]:
         """Run research phase using researcher agent"""
         self.logger.print_section("Research Phase")
         self.logger.print_status("Starting research on tool information")
@@ -262,6 +291,12 @@ class ModuleAgent:
             """
             
             result = researcher_agent.run_sync(prompt)
+
+            # Track token usage if status provided and in dev mode
+            if status and dev_mode:
+                status.add_usage(result)
+                self.save_status(status, dev_mode)
+
             self.logger.print_status("Research phase completed successfully", "SUCCESS")
             return True, {'research': result.output}
             
@@ -271,7 +306,7 @@ class ModuleAgent:
             self.logger.print_status(f"Traceback: {traceback.format_exc()}", "DEBUG")
             return False, {'error': error_msg}
     
-    def do_planning(self, tool_info: Dict[str, str], research_data: Dict[str, Any]) -> Tuple[bool, ModulePlan]:
+    def do_planning(self, tool_info: Dict[str, str], research_data: Dict[str, Any], status: ModuleGenerationStatus = None, dev_mode: bool = False) -> Tuple[bool, ModulePlan]:
         """Run planning phase using planner agent"""
         self.logger.print_section("Planning Phase")
         self.logger.print_status("Starting module planning and parameter analysis")
@@ -306,6 +341,12 @@ class ModuleAgent:
             """
             
             result = planner_agent.run_sync(prompt)
+
+            # Track token usage if status provided and in dev mode
+            if status and dev_mode:
+                status.add_usage(result)
+                self.save_status(status, dev_mode)
+
             self.logger.print_status("Planning phase completed successfully", "SUCCESS")
             return True, result.output
 
@@ -415,6 +456,11 @@ Generate a complete, valid manifest file in key=value format."""
                 # Use the specific model type for this artifact
                 result = agent.run_sync(prompt, output_type=model_class)
                 artifact_model = result.output
+
+                # Track token usage if in dev mode
+                if dev_mode:
+                    status.add_usage(result)
+                    self.save_status(status, dev_mode)
 
                 # Format the artifact using the configured formatter
                 formatted_content = formatter(artifact_model)
@@ -690,7 +736,7 @@ Generate a complete, valid manifest file in key=value format."""
             self.logger.print_status(f"Traceback: {traceback.format_exc()}", "DEBUG")
             return False
 
-    def print_final_report(self, status: ModuleGenerationStatus):
+    def print_final_report(self, status: ModuleGenerationStatus, dev_mode: bool = False):
         """Print comprehensive final report"""
         self.logger.print_section("Final Report")
         
@@ -736,6 +782,16 @@ Generate a complete, valid manifest file in key=value format."""
                     size = file.stat().st_size
                     print(f"  - {file.name} ({size:,} bytes)")
         
+        # Print token usage and cost (only in dev mode)
+        if status.input_tokens > 0 or status.output_tokens > 0:
+            total_tokens = status.input_tokens + status.output_tokens
+            estimated_cost = status.get_estimated_cost()
+            print(f"\nToken Usage (dev mode):")
+            print(f"  Input tokens:  {status.input_tokens:,}")
+            print(f"  Output tokens: {status.output_tokens:,}")
+            print(f"  Total tokens:  {total_tokens:,}")
+            print(f"  Estimated cost: ${estimated_cost:.4f}")
+
         # Overall success status
         all_artifacts_valid = all(
             artifact['generated'] and artifact['validated'] 
@@ -810,7 +866,7 @@ Generate a complete, valid manifest file in key=value format."""
             self.logger.print_status("✓ Research already complete, using existing data", "SUCCESS")
             research_success = True
         else:
-            research_success, research_data = self.do_research(tool_info)
+            research_success, research_data = self.do_research(tool_info, status, dev_mode)
             if research_success:
                 status.research_data = research_data
             else:
@@ -821,7 +877,7 @@ Generate a complete, valid manifest file in key=value format."""
             self.save_status(status, dev_mode)
 
         if not status.research_complete:
-            self.print_final_report(status)
+            self.print_final_report(status, dev_mode)
             return 1
 
         # Phase 2: Planning
@@ -830,7 +886,7 @@ Generate a complete, valid manifest file in key=value format."""
             self.logger.print_status("✓ Planning already complete, using existing plan", "SUCCESS")
             planning_success = True
         else:
-            planning_success, planning_data = self.do_planning(tool_info, status.research_data)
+            planning_success, planning_data = self.do_planning(tool_info, status.research_data, status, dev_mode)
             if planning_success:
                 status.planning_data = planning_data
             else:
@@ -841,7 +897,7 @@ Generate a complete, valid manifest file in key=value format."""
             self.save_status(status, dev_mode)
 
         if not status.planning_complete:
-            self.print_final_report(status)
+            self.print_final_report(status, dev_mode)
             return 1
 
         # Phase 3: Artifact Generation
@@ -863,7 +919,7 @@ Generate a complete, valid manifest file in key=value format."""
             self.zip_artifacts(module_path, tool_info['name'], zip_only)
 
         # Final report
-        self.print_final_report(status)
+        self.print_final_report(status, dev_mode)
 
         return 0 if (status.research_complete and status.planning_complete and artifacts_success) else 1
 
