@@ -51,7 +51,7 @@ Parameter Definition Guidelines:
   * p<N>_type: Java type class (REQUIRED) - e.g., java.io.File, java.lang.String, java.lang.Integer
   * p<N>_TYPE: GenePattern type (optional but common) - FILE, TEXT, Integer, Floating Point
   * p<N>_MODE: For FILE parameters only - typically "IN" for input files
-  * p<N>_optional: Set to "on" for optional parameters, omit or leave empty for required
+  * p<N>_optional: Set to "on" for optional parameters, include but leave empty for required
   * p<N>_default_value: Default value if parameter not specified
   * p<N>_value: For choice parameters - semicolon-separated list with format "display=value" or just values
   * p<N>_fileFormat: For FILE parameters - semicolon-separated list of allowed extensions
@@ -705,6 +705,8 @@ def create_manifest(context: RunContext[str], tool_info: Dict[str, Any] = None, 
                 # Add optional flag
                 if not param.get('required', False):
                     manifest_param['optional'] = 'on'
+                else:
+                    manifest_param['optional'] = ''
 
                 # Add default value if present
                 if 'default_value' in param and param['default_value']:
