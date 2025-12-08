@@ -48,7 +48,7 @@ Parameter Definition Guidelines:
   * p<N>_type: Java type class (REQUIRED) - e.g., java.io.File, java.lang.String, java.lang.Integer
   * p<N>_TYPE: GenePattern type (optional but common) - FILE, TEXT, Integer, Floating Point
   * p<N>_MODE: For FILE parameters only - typically "IN" for input files
-  * p<N>_optional: (REQUIRED) Set to "on" for optional parameters, Set to an empty string for required parameters
+  * p<N>_optional: (ALWAYS REQUIRED) Set to "on" for optional parameters, Set to an empty string for required parameters.
   * p<N>_default_value: Default value if parameter not specified
   * p<N>_value: For choice parameters - semicolon-separated list with format "display=value" or just values
   * p<N>_fileFormat: For FILE parameters - semicolon-separated list of allowed extensions
@@ -63,6 +63,7 @@ Parameter Definition Guidelines:
   * Simple format also allowed: p5_value=0\\=no;1\\=yes
 - File parameters should include MODE=IN and appropriate fileFormat restrictions
 - Parameter indices must be sequential starting from 1 (p1, p2, p3, etc.) with no gaps
+- p<N>_optional is ALWAYS REQUIRED for each parameter as either "on" (optional) or an empty string (required)
 """
 
 # Create agent without MCP toolsets - validation happens separately via generate-module.py
