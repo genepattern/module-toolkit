@@ -20,11 +20,15 @@ from linter import LintIssue
 PARAM_KEY_REGEX = re.compile(r"^p(\d+)_(.+)$")
 
 # Common required attributes for parameters
-COMMON_PARAM_ATTRIBUTES = {"name", "description", "optional"}
+
+REQUIRED_PARAM_ATTRIBUTES = {"name", "description", "optional", "type",  "numValues", "default_value"}
+OPTIONAL_PARAM_ATTRIBUTES = { "MODE",  "flag", "prefix", "prefix_when_specified", "value", "fileFormat"}
+
 
 # Valid values for specific attributes
 VALID_MODES = {"IN", "OUT", ""}
 VALID_TYPES = {"FILE", "TEXT", ""}
+VALID_OPTIONAL_VALUES = {"on", ""}
 
 NUMVALUES_INT_PATTERN = re.compile(r"^-?\d+$")
 NUMVALUES_RANGE_PATTERN = re.compile(r"^(-?\d+)\.\.(-?\d+)$")
@@ -81,14 +85,30 @@ def run_test(lines: List[str]) -> List[LintIssue]:
         is_file_param = _is_file_parameter(param_attrs)
 
         # Check for required attributes
-        missing_attrs = COMMON_PARAM_ATTRIBUTES - set(param_attrs.keys())
-        if missing_attrs:
-            issues.append(LintIssue(
-                "WARNING",
-                f"Parameter p{param_num} is missing recommended attribute(s): {sorted(missing_attrs)}",
-                None,
-                None,
-            ))
+        missing_required_attrs = REQUIRED_PARAM_ATTRIBUTES - set(param_attrs.keys())
+        if missing_required_attrs:
+          
+            # Other missing attributes generate WARNINGs
+            if missing_required_attrs:
+                issues.append(LintIssue(
+                    "WARNING",
+                    f"Parameter p{param_num} is missing required attribute(s): {sorted(missing_required_attrs)}.  Required attributes must be specified for each parameter even if only as an empty string.",
+                    None,
+                    None,
+                ))
+
+        missing_optional_attrs = OPTIONAL_PARAM_ATTRIBUTES - set(param_attrs.keys())
+        if missing_optional_attrs:
+
+            # Other missing attributes generate WARNINGs
+            if missing_optional_attrs:
+                issues.append(LintIssue(
+                    "WARNING",
+                    f"Parameter p{param_num} is missing optional attribute(s): {sorted(missing_optional_attrs)}.  It is recommended these be specified for each parameter even if only as an empty string.",
+                    None,
+                    None,
+                ))
+
 
         # Validate MODE values if present
         if "MODE" in param_attrs:
@@ -96,7 +116,7 @@ def run_test(lines: List[str]) -> List[LintIssue]:
             if mode_value not in VALID_MODES:
                 _, line_no, line_text = param_attrs["MODE"]
                 issues.append(LintIssue(
-                    "WARNING",
+                    "ERROR",
                     f"Parameter p{param_num} has unusual MODE value '{mode_value}'. Common values are: IN, OUT, or empty",
                     line_no,
                     line_text,
@@ -108,6 +128,18 @@ def run_test(lines: List[str]) -> List[LintIssue]:
             if type_value not in VALID_TYPES:
                 # This is just informational since TYPE can have other values like Integer, Float, etc.
                 pass
+
+        # Validate optional attribute values
+        if "optional" in param_attrs:
+            optional_value = param_attrs["optional"][0]
+            if optional_value not in VALID_OPTIONAL_VALUES:
+                _, line_no, line_text = param_attrs["optional"]
+                issues.append(LintIssue(
+                    "WARNING",
+                    f"Parameter p{param_num} has invalid 'optional' value '{optional_value}'. Expected 'on' (for optional) or empty string (for required)",
+                    line_no,
+                    line_text,
+                ))
 
         # Check that file parameters have MODE=IN or MODE=OUT
         if "type" in param_attrs:
