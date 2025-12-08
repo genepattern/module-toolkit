@@ -1,3 +1,4 @@
+import os
 import re
 from typing import List
 from pydantic_ai import Agent, RunContext
@@ -7,6 +8,9 @@ from .models import ModulePlan, configured_llm_model
 
 # Load environment variables from .env file
 load_dotenv()
+
+# Configuration
+MAX_ARTIFACT_LOOPS = int(os.getenv('MAX_ARTIFACT_LOOPS', '5'))
 
 
 system_prompt = """
@@ -112,7 +116,7 @@ any user-provided instructions.
 """
 
 # Create agent with structured output support
-planner_agent = Agent(configured_llm_model(), system_prompt=system_prompt, output_type=ModulePlan)
+planner_agent = Agent(configured_llm_model(), system_prompt=system_prompt, output_type=ModulePlan, retries=MAX_ARTIFACT_LOOPS)
 
 
 @planner_agent.tool

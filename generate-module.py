@@ -102,8 +102,8 @@ class ModuleGenerationStatus:
         try:
             usage = result.usage()
             if usage:
-                self.input_tokens += usage.request_tokens or 0
-                self.output_tokens += usage.response_tokens or 0
+                self.input_tokens += usage.input_tokens or 0
+                self.output_tokens += usage.output_tokens or 0
         except Exception:
             # If usage tracking fails, continue without crashing
             pass
