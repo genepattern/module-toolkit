@@ -10,7 +10,7 @@ class ManifestParameter(BaseModel):
     name: str = Field(..., description="Parameter name")
     description: Optional[str] = Field(None, description="Parameter description")
     default_value: Optional[str] = Field(None, description="Default value for parameter")
-    optional: Optional[str] = Field(None, description="Whether parameter is optional ('on' or empty)")
+    optional: str = Field(None, description="Whether parameter is optional ('on' or empty)")
     type_class: Optional[str] = Field(None, alias='type',
                                       description="Java type class (e.g., java.io.File, java.lang.String)")
     fileFormat: Optional[str] = Field(None, description="Allowed file formats (semicolon-separated)")
@@ -81,7 +81,7 @@ class ManifestModel(BaseModel):
     publicationDate: Optional[str] = Field(None, description="Publication date")
 
     # Module type and classification
-    taskType: Optional[str] = Field(None, description="Task type (e.g., 'gsea', 'rna-seq', 'javascript')")
+    taskType: str = Field(None, description="Task type (e.g., 'gsea', 'rna-seq', 'javascript')")
 
     # Advanced settings
     requiredPatchLSIDs: Optional[str] = Field(None, description="Required patch LSIDs")
@@ -142,8 +142,17 @@ class ManifestModel(BaseModel):
             for param_num in sorted(self.parameters.keys()):
                 param = self.parameters[param_num]
                 param_dict = param.model_dump(by_alias=True, exclude_none=True)
+
+                # Ensure 'optional' field is always included (empty string for required params)
+                # This is needed because GenePattern expects p<num>_optional= for required params
+                if 'optional' not in param_dict:
+                    param_dict['optional'] = ''
+
                 for key, value in sorted(param_dict.items()):
-                    if value is not None and value != '':
+                    # Special handling for 'optional' field - always include it
+                    if key == 'optional':
+                        lines.append(f"p{param_num}_{key}={value}")
+                    elif value is not None and value != '':
                         lines.append(f"p{param_num}_{key}={value}")
 
         # Add additional properties
