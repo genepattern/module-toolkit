@@ -1,6 +1,8 @@
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from typing import Optional, Dict
 import re
+import json
+import ast
 
 
 class ManifestParameter(BaseModel):
@@ -218,3 +220,18 @@ class ManifestModel(BaseModel):
         data['parameters'] = param_objects
 
         return cls(**data)
+
+    @field_validator('parameters', mode='before')
+    @classmethod
+    def validate_parameters(cls, v):
+        if isinstance(v, str):
+            # Attempt to parse as JSON
+            try:
+                v = json.loads(v)
+            except json.JSONDecodeError:
+                # If JSON parsing fails, attempt to parse as Python literal (e.g., dict, list)
+                try:
+                    v = ast.literal_eval(v)
+                except (ValueError, SyntaxError) as e:
+                    raise ValueError(f"Invalid parameters format: {e}")
+        return v

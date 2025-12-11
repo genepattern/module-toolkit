@@ -745,7 +745,7 @@ def create_manifest(context: RunContext[str], tool_info: Dict[str, Any] = None, 
                 if 'prefix' in param and param['prefix']:
                     manifest_param['prefix_when_specified'] = param['prefix']
 
-                # Add numValues based on value_count
+                # Add numValues based on value_count (now in correct manifest format)
                 if 'value_count' in param and param['value_count']:
                     manifest_param['numValues'] = param['value_count']
                 elif param.get('required', False):
@@ -780,6 +780,7 @@ def create_manifest(context: RunContext[str], tool_info: Dict[str, Any] = None, 
             "categories": categories_str,
             "commandLine": command_line,
             "language": tool_language,
+            "taskType": tool_language,  # Required field: taskType should match the language
             "os": "any",
             "cpuType": "any",
             "taskDoc": "README.md",

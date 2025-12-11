@@ -103,7 +103,7 @@ class ModuleGenerationStatus:
             usage = result.usage()
             if usage:
                 self.input_tokens += usage.input_tokens or 0
-                self.output_tokens += usage.output_tokens or 0
+                self.output_tokens += usage.outputTokens or 0
         except Exception:
             # If usage tracking fails, continue without crashing
             pass
@@ -444,17 +444,32 @@ Generate a complete, valid manifest file in key=value format."""
                     if tool_info.get('instructions'):
                         instructions_section = f"\n\nIMPORTANT - Additional Instructions:\n{tool_info['instructions']}\n"
 
-                    # For other artifacts, use the tool-based prompt
-                    prompt = f"""Use the {create_method} tool with the following parameters:
-                - tool_info: {tool_info}
-                - planning_data: {planning_data_dict}
-                - error_report: {error_report}
-                - attempt: {attempt}{instructions_section}
+                    # For other artifacts, use a simpler prompt that instructs the LLM to call the tool
+                    # The LLM will extract the needed data from the message parts
+                    prompt = f"""Generate the {artifact_name} artifact for the GenePattern module '{tool_info['name']}'.
 
-                Generate the {artifact_name} artifact for {tool_info['name']}."""
+{"Previous attempt failed with error: " + error_report if error_report else ""}
+
+This is attempt {attempt} of {max_loops}.{instructions_section}
+
+Use the {create_method} tool to generate the artifact."""
 
                 # Use the specific model type for this artifact
-                result = agent.run_sync(prompt, output_type=model_class)
+                # Pass tool_info and planning_data as message parts so they're available to the LLM
+                result = agent.run_sync(
+                    prompt,
+                    output_type=model_class,
+                    message_history=[{
+                        'role': 'user',
+                        'content': f"""Tool Information: {json.dumps(tool_info)}
+
+Planning Data: {json.dumps(planning_data_dict)}
+
+Error Report: {error_report}
+
+Attempt: {attempt}"""
+                    }]
+                )
                 artifact_model = result.output
 
                 # Track token usage if in dev mode

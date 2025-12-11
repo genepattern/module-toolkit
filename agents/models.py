@@ -26,10 +26,10 @@ class ParameterType(str, Enum):
 
 
 class ValueCount(str, Enum):
-    ZERO_OR_ONE = "0-1"
-    ONE = "1"
-    ZERO_OR_MORE = "0 or more"
-    ONE_OR_MORE = "1 or more"
+    ZERO_OR_ONE = "0..1"
+    ONE = "1..1"
+    ZERO_OR_MORE = "0+"
+    ONE_OR_MORE = "1+"
 
 
 class ChoiceOption(BaseModel):
