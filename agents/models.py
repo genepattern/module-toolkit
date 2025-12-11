@@ -60,6 +60,7 @@ class ModulePlan(BaseModel):
     categories: List[str] = Field(description="Categories for this module (preprocessing, clustering, etc.)")
     cpu_cores: int = Field(description="CPU core requirement for the tool")
     memory: str = Field(description="Memory requirement for the tool (e.g., '2GB')")
+    lsid: str = Field(description="Life Science Identifier (LSID) for the module in format urn:lsid:broad.mit.edu:cancer.software.genepattern.module.generated:<5-digit-id>:<version>")
     plan: str = Field(description="The full unstructured text of the plan")
     wrapper_script: str = Field(description="The name of the wrapper script")
     command_line: str = Field(description="Example command line for calling the wrapper script")

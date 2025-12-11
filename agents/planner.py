@@ -1,5 +1,6 @@
 import os
 import re
+import random
 from typing import List
 from pydantic_ai import Agent, RunContext
 from dotenv import load_dotenv
@@ -61,8 +62,9 @@ Always carefully review and incorporate any user-provided instructions into your
   and periods are allowed. Examples: input.file, fragment.length, max.threads
 - **Version Format**: Major versions (1, 2, 3) are production releases. Minor versions (1.1, 1.2, 5.2) 
   are beta releases.
-- **LSID Format**: urn:lsid:broad.mit.edu:cancer.software.genepattern.module.analysis:<5-digit-id>:<version>
-  Example: urn:lsid:broad.mit.edu:cancer.software.genepattern.module.analysis:00123:1
+- **LSID Format**: urn:lsid:broad.mit.edu:cancer.software.genepattern.module.generated:<5-digit-id>:<version>
+  Example: urn:lsid:broad.mit.edu:cancer.software.genepattern.module.generated:12345:1
+  **IMPORTANT**: You MUST use the generate_lsid tool to create a unique LSID for each module
 
 **Docker Image Tag Convention:**
 - **docker_image_tag**: Must be in format `genepattern/<module_name>:<version>`
@@ -98,13 +100,15 @@ Example with 3 parameters (input.file, output.format, threads):
 5. Design intuitive parameter groupings following GenePattern conventions
 6. Plan comprehensive testing and validation
 7. Create detailed implementation roadmap
-8. **ALWAYS use generate_command_line tool to create the command_line field**
+8. **ALWAYS use generate_lsid tool to create a unique LSID for the module**
+9. **ALWAYS use generate_command_line tool to create the command_line field**
 
 **Primary Output Format:**
 Your main planning function should return structured data as a ModulePlan Pydantic model containing:
 - Module metadata (name, description, author, language)
 - Input file formats and categories
 - Resource requirements (CPU cores, memory)
+- LSID (generated using the generate_lsid tool)
 - Full unstructured plan text alongside structured data
 - Wrapper script name and example command line (MUST include ALL parameters)
 - Detailed parameter specifications with types, prefixes, constraints
@@ -153,10 +157,12 @@ def create_structured_plan(context: RunContext[ModulePlan], tool_name: str, rese
         categories=["unknown"],
         cpu_cores=1,
         memory="1GB",
+        lsid="urn:lsid:broad.mit.edu:cancer.software.genepattern.module.generated:00000:1",
         plan="Detailed planning findings will be compiled into a comprehensive plan",
         wrapper_script=f"{tool_name.lower()}_wrapper.py",
         command_line=f"python {tool_name.lower()}_wrapper.py --help",
-        parameters=[]
+        parameters=[],
+        docker_image_tag=f"genepattern/{tool_name.lower()}:1"
     )
 
 
@@ -1090,3 +1096,33 @@ def generate_command_line(context: RunContext[ModulePlan], wrapper_script: str, 
 
     print(f"✅ PLANNER TOOL: generate_command_line completed: {command_line[:100]}...")
     return command_line
+
+
+@planner_agent.tool
+def generate_lsid(context: RunContext[ModulePlan], version: str = "1") -> str:
+    """
+    Generate a Life Science Identifier (LSID) for a GenePattern module.
+
+    This tool generates a unique LSID for the module being created in the format:
+    urn:lsid:broad.mit.edu:cancer.software.genepattern.module.generated:<5-digit-id>:<version>
+
+    The LSID is a unique identifier that will be used throughout the module generation process
+    and should be included in the module manifest.
+
+    Args:
+        version: The version number for the module (default: "1")
+
+    Returns:
+        A complete LSID string for the module
+    """
+
+    print(f"🔑 PLANNER TOOL: Running generate_lsid for version {version}")
+
+    # Generate a random 5-digit number
+    random_id = random.randint(10000, 99999)
+
+    # Format the LSID
+    lsid = f"urn:lsid:broad.mit.edu:cancer.software.genepattern.module.generated:{random_id}:{version}"
+
+    print(f"✅ PLANNER TOOL: generate_lsid completed: {lsid}")
+    return lsid

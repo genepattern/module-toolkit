@@ -655,9 +655,15 @@ def create_manifest(context: RunContext[str], tool_info: Dict[str, Any] = None, 
         if attempt > 1 and error_report:
             print(f"⚠️ Retry attempt {attempt} - previous error: {error_report[:100]}")
 
-        # Generate LSID
-        lsid_object = tool_name.lower().replace(' ', '').replace('.', '').replace('_', '')
-        lsid = f"urn:lsid:genepattern.org:module.analysis:{lsid_object}:1"
+        # Generate LSID - use from planning_data if available, otherwise generate fallback
+        if planning_dict and 'lsid' in planning_dict and planning_dict['lsid']:
+            lsid = planning_dict['lsid']
+            print(f"✓ Using LSID from planning_data: {lsid}")
+        else:
+            # Fallback: generate a basic LSID if not provided in planning_data
+            lsid_object = tool_name.lower().replace(' ', '').replace('.', '').replace('_', '')
+            lsid = f"urn:lsid:genepattern.org:module.analysis:{lsid_object}:1"
+            print(f"⚠️ LSID not in planning_data, using fallback: {lsid}")
 
         # Convert planning_data parameters to manifest parameter format
         manifest_parameters = {}
