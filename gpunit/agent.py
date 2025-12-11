@@ -727,7 +727,7 @@ def create_gpunit(context: RunContext[str], tool_info: Dict[str, Any], planning_
 # Resource requirements: {cpu_cores} CPU cores, {memory} memory
 # NOTE: This is a single test with required parameters only
 name: "{module_name} - {test_scenario}"
-module: {module_lsid}
+module: {module_name}
 params:
 """
 

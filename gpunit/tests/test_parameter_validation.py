@@ -92,22 +92,15 @@ def run_test(gpunit_path: str, shared_context: dict) -> List[LintIssue]:
                 "Parameter not in expected parameters list"
             ))
     
-    # Check for missing expected parameters (optional - might be warnings instead of errors)
-    missing_parameters = expected_set - actual_parameters
-    if missing_parameters:
-        sorted_missing = sorted(missing_parameters)
-        for param in sorted_missing:
-            issues.append(LintIssue(
-                "WARNING",
-                f"Expected parameter '{param}' not found in GPUnit file",
-                "Parameter was expected but not provided in this test"
-            ))
-    
+    # Note: We intentionally do NOT warn about missing parameters
+    # GPUnit tests can test any subset of parameters (typically only required ones)
+    # Missing optional parameters from a test is perfectly valid
+
     # Report summary info
-    if not unexpected_parameters and not missing_parameters:
+    if not unexpected_parameters:
         issues.append(LintIssue(
             "INFO",
-            f"All {len(expected_parameters)} expected parameters found and validated"
+            f"GPUnit test includes {len(actual_parameters)} parameter(s), all are valid"
         ))
     
     return issues

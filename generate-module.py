@@ -517,15 +517,17 @@ Attempt: {attempt}"""
                         extra_validation_args.extend(['--module', module_name])
                         self.logger.print_status(f"Using module name for gpunit validation: {module_name}")
                     
-                    # Extract parameter names from planning data
+                    # Extract ONLY REQUIRED parameter names from planning data
+                    # Optional parameters don't need to be in every GPUnit test
                     parameters = planning_data_dict.get('parameters', [])
                     if parameters:
-                        param_names = [p.get('name', '') for p in parameters if p.get('name')]
-                        if param_names:
+                        # Filter to only required parameters
+                        required_param_names = [p.get('name', '') for p in parameters if p.get('name') and p.get('required', False)]
+                        if required_param_names:
                             extra_validation_args.append('--parameters')
-                            extra_validation_args.extend(param_names)
-                            self.logger.print_status(f"Using {len(param_names)} parameters for gpunit validation")
-                    
+                            extra_validation_args.extend(required_param_names)
+                            self.logger.print_status(f"Using {len(required_param_names)} required parameters for gpunit validation")
+
                     # Only set extra_validation_args if we have something to pass
                     if not extra_validation_args:
                         extra_validation_args = None
