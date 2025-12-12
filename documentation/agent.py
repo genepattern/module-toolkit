@@ -658,18 +658,22 @@ def optimize_documentation_structure(context: RunContext[str], existing_content:
 
 
 @documentation_agent.tool
-def create_documentation(context: RunContext[str], tool_info: Dict[str, Any], planning_data: Dict[str, Any], attempt: int = 1) -> str:
+def create_documentation(context: RunContext[str]) -> str:
     """
     Generate comprehensive user documentation (README.md) for the GenePattern module.
     
     Args:
-        tool_info: Dictionary with tool information (name, version, language, description)
-        planning_data: Planning phase results with parameters and context
-        attempt: Attempt number for retry logic
-    
+        context: RunContext with dependencies containing tool_info, planning_data, error_report, and attempt
+
     Returns:
         Complete README.md content ready for validation
     """
+    # Extract data from context dependencies
+    tool_info = context.deps.get('tool_info', {})
+    planning_data = context.deps.get('planning_data', {})
+    error_report = context.deps.get('error_report', '')
+    attempt = context.deps.get('attempt', 1)
+
     print(f"📚 DOCUMENTATION TOOL: Running create_documentation for '{tool_info.get('name', 'unknown')}' (attempt {attempt})")
     
     try:

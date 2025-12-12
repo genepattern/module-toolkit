@@ -593,19 +593,22 @@ def optimize_test_coverage(context: RunContext[str], existing_tests: List[Dict[s
 
 
 @gpunit_agent.tool
-def create_gpunit(context: RunContext[str], tool_info: Dict[str, Any], planning_data: Dict[str, Any], error_report: str = "", attempt: int = 1) -> str:
+def create_gpunit(context: RunContext[str]) -> str:
     """
     Generate a comprehensive GPUnit test definition (test.yml) for the GenePattern module.
     
     Args:
-        tool_info: Dictionary with tool information (name, version, language, description)
-        planning_data: Planning phase results with parameters and context
-        error_report: Optional error feedback from previous validation attempts
-        attempt: Attempt number for retry logic
-    
+        context: RunContext with dependencies containing tool_info, planning_data, error_report, and attempt
+
     Returns:
         Complete GPUnit YAML content ready for validation
     """
+    # Extract data from context dependencies
+    tool_info = context.deps.get('tool_info', {})
+    planning_data = context.deps.get('planning_data', {})
+    error_report = context.deps.get('error_report', '')
+    attempt = context.deps.get('attempt', 1)
+
     print(f"🧪 GPUNIT TOOL: Running create_gpunit for '{tool_info.get('name', 'unknown')}' (attempt {attempt})")
     
     try:

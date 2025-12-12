@@ -214,19 +214,22 @@ def suggest_optimizations(context: RunContext[str], dockerfile_content: str) -> 
 
 
 @dockerfile_agent.tool
-def create_dockerfile(context: RunContext[str], tool_info: Dict[str, Any], planning_data: Dict[str, Any], error_report: str = "", attempt: int = 1) -> str:
+def create_dockerfile(context: RunContext[str]) -> str:
     """
     Generate a complete Dockerfile for the GenePattern module.
     
     Args:
-        tool_info: Dictionary with tool information (name, version, language, description)
-        planning_data: Planning phase results with parameters and context
-        error_report: Optional error feedback from previous validation attempts
-        attempt: Attempt number for retry logic
-    
+        context: RunContext with dependencies containing tool_info, planning_data, error_report, and attempt
+
     Returns:
         Complete Dockerfile content ready for validation
     """
+    # Extract data from context dependencies
+    tool_info = context.deps.get('tool_info', {})
+    planning_data = context.deps.get('planning_data', {})
+    error_report = context.deps.get('error_report', '')
+    attempt = context.deps.get('attempt', 1)
+
     print(f"🐳 DOCKERFILE TOOL: Running create_dockerfile for '{tool_info.get('name', 'unknown')}' (attempt {attempt})")
     
     try:
@@ -389,11 +392,15 @@ RUN {install_cmd} "install.packages('{tool_name}', repos='http://cran.r-project.
 
 """
 
-        # Determine wrapper script extension and filename
+        # IMPORTANT: Always use wrapper_script from planning_data
         wrapper_filename = wrapper_script
         if not wrapper_filename:
+            # Only use fallback if wrapper_script is completely missing
             ext_map = {'python': '.py', 'r': '.R', 'bash': '.sh'}
             wrapper_filename = f"wrapper{ext_map.get(language, '.py')}"
+            print(f"⚠️  No wrapper_script in planning_data, using fallback: {wrapper_filename}")
+        else:
+            print(f"✓ Using wrapper_script from planning_data for COPY command: {wrapper_filename}")
 
         # Add module files with proper wrapper script name
         # Only copy files that are required and always present
