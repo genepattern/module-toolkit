@@ -55,6 +55,10 @@ Assertion Strategies:
 - Verify error messages for invalid inputs
 - Check execution time and resource usage where relevant
 
+Output Instructions:
+- Strictly create a separate YAML file for each distinct test case
+- Don't combine multiple tests into a single file.
+
 Always generate complete, valid GPUnit test files that provide thorough validation
 of module functionality and can be executed reliably in automated testing environments.
 """
