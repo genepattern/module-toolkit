@@ -455,7 +455,8 @@ Call the {create_method} tool with the following parameters:
 - tool_info: Use the tool information provided
 - planning_data: Use the planning data provided
 - error_report: {repr(error_report)}
-- attempt: {attempt}"""
+- attempt: {attempt}.
+Make sure the generated artifact follows all guidelines, key requirements and critical rules and edit what the tool gave you as needed."""
 
                 # Create a dependency context that includes tool_info and planning_data
                 # This makes them automatically available to tool functions via RunContext
