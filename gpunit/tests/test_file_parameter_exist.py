@@ -79,7 +79,7 @@ def run_test(gpunit_path: str, shared_context: dict) -> List[LintIssue]:
         return issues  # Structure validation will catch this
     
     gpunit_dir=os.path.dirname(os.path.abspath(gpunit_path))
-    #Validate files
+    # Validate files
     for param_name, param_value in params.items():
         if param_name not in expected_param_types: continue
         type_str=expected_param_types[param_name]
