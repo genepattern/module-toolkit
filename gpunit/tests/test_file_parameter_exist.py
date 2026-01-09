@@ -93,7 +93,7 @@ def run_test(gpunit_path: str, shared_context: dict) -> List[LintIssue]:
                 #HEAD request
                 req=urllib.request.Request(param_value, method="HEAD")
                 with urllib.request.urlopen(req, timeout=5) as response:
-                    if response.status!=200: error = f"URL returned status: {response.status}"
+                    if response.status != 200: error = f"URL returned status: {response.status}"
             except urllib.error.URLError as e:
                 error=f"URL inaccessible: {str(e)}"
             except Exception as e:
