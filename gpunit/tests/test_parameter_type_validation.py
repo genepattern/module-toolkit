@@ -78,12 +78,12 @@ def run_test(gpunit_path: str, shared_context: dict) -> List[LintIssue]:
     #Validate parameter types
     for param_name, param_value in params.items():
         if param_name not in expected_param_types: continue
-        expected_type=expected_param_types[param_name]
-        type_lower=expected_type.lower()
+        expected_type = expected_param_types[param_name]
+        type_lower = expected_type.lower()
         if param_value is None:
             issues.append(LintIssue("WARNING",f"Parameter '{param_name}' has no value",f"Expected type: {expected_type}"))
             continue
-        is_valid=True
+        is_valid = True
         #Number validation
         if 'number' in type_lower:
             if not (isinstance(param_value, (int, float)) and not isinstance(param_value, bool)): is_valid = False
