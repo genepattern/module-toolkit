@@ -78,40 +78,40 @@ def run_test(gpunit_path: str, shared_context: dict) -> List[LintIssue]:
     if not isinstance(params, dict):
         return issues  # Structure validation will catch this
     
-    gpunit_dir=os.path.dirname(os.path.abspath(gpunit_path))
-    # Validate files
+    gpunit_dir = os.path.dirname(os.path.abspath(gpunit_path))
+    #Validate files
     for param_name, param_value in params.items():
         if param_name not in expected_param_types: continue
-        type_str=expected_param_types[param_name]
+        type_str = expected_param_types[param_name]
         if 'file' not in type_str.lower(): continue
         if not param_value or not isinstance(param_value, str): continue
         #Check URL/Local File
-        if param_value.startswith(("http://","https://","ftp://")):
+        if param_value.startswith(("http://", "https://", "ftp://")):
             #URL validation
-            error=None
+            error = None
             try:
                 #HEAD request
-                req=urllib.request.Request(param_value, method="HEAD")
+                req = urllib.request.Request(param_value, method="HEAD")
                 with urllib.request.urlopen(req, timeout=5) as response:
                     if response.status != 200: error = f"URL returned status: {response.status}"
             except urllib.error.URLError as e:
-                error=f"URL inaccessible: {str(e)}"
+                error = f"URL inaccessible: {str(e)}"
             except Exception as e:
-                error=f"Error checking URL: {str(e)}"
+                error = f"Error checking URL: {str(e)}"
             if error:
                 issues.append(LintIssue("ERROR", 
                     f"File parameter '{param_name}' points to inaccessible URL",
                     f"{error} (Value: {param_value})"))
         else:
             #Local File validation
-            error=None
+            error = None
             if os.path.isabs(param_value):
                 if not (os.path.exists(param_value) and os.path.isfile(param_value)):
-                    error=f"Absolute path not found: {param_value}"
+                    error = f"Absolute path not found: {param_value}"
             else:
-                full_path=os.path.join(gpunit_dir, param_value)
+                full_path = os.path.join(gpunit_dir, param_value)
                 if not (os.path.exists(full_path) and os.path.isfile(full_path)):
-                    error=f"File not found at: {full_path}"
+                    error = f"File not found at: {full_path}"
             if error:
                 issues.append(LintIssue("ERROR",
                     f"File parameter '{param_name}' points to missing file",
