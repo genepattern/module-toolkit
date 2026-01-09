@@ -161,6 +161,46 @@ def dashboard(request):
     return render(request, 'generator/dashboard.html', context)
 
 
+@login_required
+def debug_view(request):
+    """Debug view to diagnose module loading issues."""
+    username = request.session.get('username')
+    user_dir = settings.GENERATED_MODULES_DIR / username
+
+    debug_info = {
+        'username': username,
+        'GENERATED_MODULES_DIR': str(settings.GENERATED_MODULES_DIR),
+        'user_dir': str(user_dir),
+        'user_dir_exists': user_dir.exists(),
+        'items_in_user_dir': [],
+        'directories': [],
+        'modules_from_function': [],
+    }
+
+    if user_dir.exists():
+        try:
+            items = list(user_dir.iterdir())
+            debug_info['items_in_user_dir'] = [str(item.name) for item in items]
+            debug_info['directories'] = [
+                str(item.name) for item in items
+                if item.is_dir() and not item.name.startswith('.')
+            ]
+        except Exception as e:
+            debug_info['error_listing_dir'] = str(e)
+
+    # Test get_user_modules function
+    try:
+        modules = get_user_modules(username)
+        debug_info['modules_from_function'] = [
+            {'name': m['name'], 'status': m['status']} for m in modules
+        ]
+    except Exception as e:
+        debug_info['error_getting_modules'] = str(e)
+
+    from django.http import JsonResponse
+    return JsonResponse(debug_info, json_dumps_params={'indent': 2})
+
+
 def run_generate_script(username, form_data, module_toolkit_path, output_dir, module_name):
     """Run the generate-module.py script in a background thread."""
     global running_modules
