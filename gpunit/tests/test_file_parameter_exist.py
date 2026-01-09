@@ -85,7 +85,7 @@ def run_test(gpunit_path: str, shared_context: dict) -> List[LintIssue]:
         type_str = expected_param_types[param_name]
         if 'file' not in type_str.lower(): continue
         if not param_value or not isinstance(param_value, str): continue
-        #Check URL/Local File
+        # Check URL/Local File
         if param_value.startswith(("http://", "https://", "ftp://")):
             #URL validation
             error = None
