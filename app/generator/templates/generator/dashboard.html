@@ -290,6 +290,20 @@
         let pollInterval = null;
         let consoleOffset = 0;
         let consoleModalInstance = null;
+        let isConsoleModalOpen = false;
+
+        // Add event listeners for console modal to track its state
+        document.addEventListener('DOMContentLoaded', function() {
+            const consoleModalElement = document.getElementById('consoleModal');
+            if (consoleModalElement) {
+                consoleModalElement.addEventListener('shown.bs.modal', function() {
+                    isConsoleModalOpen = true;
+                });
+                consoleModalElement.addEventListener('hidden.bs.modal', function() {
+                    isConsoleModalOpen = false;
+                });
+            }
+        });
 
         // Form submission
         document.getElementById('generateForm').addEventListener('submit', async function(e) {
@@ -434,7 +448,7 @@
                 const data = await response.json();
 
                 // Also fetch console log updates if modal is open
-                if (consoleModalInstance && consoleModalInstance._isShown) {
+                if (isConsoleModalOpen) {
                     await updateConsoleLog(moduleName);
                 }
 

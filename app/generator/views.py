@@ -207,6 +207,7 @@ def run_generate_script(username, form_data, module_toolkit_path, output_dir, mo
 
     # For resume, use the existing module name; for new runs, we'll detect the created directory
     actual_module_name = form_data.get('resume') or module_name
+    is_resume = bool(form_data.get('resume'))
 
     # Mark module as running
     if username not in running_modules:
@@ -215,6 +216,7 @@ def run_generate_script(username, form_data, module_toolkit_path, output_dir, mo
 
     # Create the log file in the user's output directory (not the module directory yet)
     # For new runs, we'll move it once we know the actual module directory
+    # For resume, we append to the existing log or create a temp one
     temp_log_file = output_dir / f'.{actual_module_name}_console.log'
 
     # Build command
@@ -248,15 +250,20 @@ def run_generate_script(username, form_data, module_toolkit_path, output_dir, mo
         resume_path = output_dir / form_data['resume']
         cmd.extend(['--resume', str(resume_path)])
 
-    actual_module_dir = None
+    # For resume, the actual_module_dir is known from the start
+    actual_module_dir = actual_module_name if is_resume else None
 
     # Run the script and capture output
     try:
-        with open(temp_log_file, 'w') as log:
-            log.write(f"=== Module Generation Started: {datetime.now().isoformat()} ===\n")
+        # For resume, append to existing log; for new runs, create new log
+        file_mode = 'a' if is_resume else 'w'
+        with open(temp_log_file, file_mode) as log:
+            log.write(f"\n{'=' * 60}\n")
+            log.write(f"=== Module Generation {'Resumed' if is_resume else 'Started'}: {datetime.now().isoformat()} ===\n")
             log.write(f"Command: {' '.join(cmd)}\n")
             log.write("=" * 60 + "\n\n")
             log.flush()
+            os.fsync(log.fileno())  # Force OS to write to disk
 
             process = subprocess.Popen(
                 cmd,
@@ -268,12 +275,22 @@ def run_generate_script(username, form_data, module_toolkit_path, output_dir, mo
             )
 
             # Stream output to log file and detect actual module directory
+            line_count = 0
+            last_fsync = datetime.now()
             for line in process.stdout:
                 log.write(line)
                 log.flush()
+                line_count += 1
 
-                # Detect the actual module directory from output
-                if 'Creating module directory:' in line and actual_module_dir is None:
+                # Force OS sync every 10 lines or every 2 seconds (whichever comes first)
+                now = datetime.now()
+                if line_count >= 10 or (now - last_fsync).total_seconds() >= 2:
+                    os.fsync(log.fileno())
+                    line_count = 0
+                    last_fsync = now
+
+                # Detect the actual module directory from output (only for new runs)
+                if not is_resume and 'Creating module directory:' in line and actual_module_dir is None:
                     # Extract the directory path from the line
                     # Format: [timestamp] INFO: Creating module directory: /path/to/module_dir
                     try:
@@ -294,13 +311,19 @@ def run_generate_script(username, form_data, module_toolkit_path, output_dir, mo
             log.write(f"\n{'=' * 60}\n")
             log.write(f"=== Process exited with code: {process.returncode} ===\n")
             log.write(f"=== Completed: {datetime.now().isoformat()} ===\n")
+            log.flush()
+            os.fsync(log.fileno())  # Final sync
 
     except subprocess.TimeoutExpired:
         with open(temp_log_file, 'a') as log:
             log.write("\n\n=== ERROR: Process timed out after 30 minutes ===\n")
+            log.flush()
+            os.fsync(log.fileno())
     except Exception as e:
         with open(temp_log_file, 'a') as log:
             log.write(f"\n\n=== ERROR: {str(e)} ===\n")
+            log.flush()
+            os.fsync(log.fileno())
     finally:
         # Move log file to the actual module directory if it exists
         if actual_module_dir:
@@ -308,6 +331,10 @@ def run_generate_script(username, form_data, module_toolkit_path, output_dir, mo
             try:
                 if final_log_path.parent.exists():
                     import shutil
+                    # For resume, the log might already exist in the module directory
+                    # Remove it first so we can move the temp log in its place
+                    if final_log_path.exists():
+                        final_log_path.unlink()
                     shutil.move(str(temp_log_file), str(final_log_path))
             except Exception:
                 pass
@@ -406,9 +433,12 @@ def module_status(request, module_dir):
     # Check if module is currently running
     is_running = username in running_modules and module_dir in running_modules.get(username, {})
 
+    # If marked as running in memory, ALWAYS return running status regardless of other checks
+    # This prevents old status.json from causing false error reports on resume
+    if is_running:
+        return JsonResponse({'status': 'running', 'running': True})
+
     if not module_path.exists():
-        if is_running:
-            return JsonResponse({'status': 'running', 'running': True})
         return JsonResponse({'status': 'not_found'})
     
     # Check console.log for completion marker to detect if script has finished
@@ -421,16 +451,10 @@ def module_status(request, module_dir):
                 # Check for completion markers in the log
                 if '=== Process exited with code:' in log_content or '=== Completed:' in log_content:
                     script_completed = True
-                    # If script completed, make sure it's not marked as running
-                    is_running = False
         except IOError:
             pass
 
     status_file = module_path / 'status.json'
-
-    # If still running (and script hasn't completed), return running status
-    if is_running and not script_completed:
-        return JsonResponse({'status': 'running', 'running': True})
 
     if not status_file.exists():
         # If script completed but no status.json, it's an error

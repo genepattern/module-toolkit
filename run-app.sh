@@ -79,10 +79,11 @@ echo "  - Docker socket mounted for image building"
 
 # Run the container
 docker run -d \
-    --name "$CONTAINER_NAME" --rm \
+    --name "$CONTAINER_NAME" \
     -p "${HOST_PORT}:8000" \
     -v "$GENERATED_MODULES_DIR:/app/generated-modules" \
     -v /var/run/docker.sock:/var/run/docker.sock \
+    --group-add $(stat -f '%g' /var/run/docker.sock) \
     -e MODULE_TOOLKIT_PATH=/app \
     --env-file .env \
     --env-file app/.env \

@@ -10,10 +10,16 @@ ENV PYTHONUNBUFFERED=1
 # Set the working directory
 WORKDIR /app
 
-# Install system dependencies (including docker CLI for building images)
+# Install system dependencies and Docker CLI (version 20.10 to match host daemon API 1.41)
+# Download Docker CLI binary directly since package repos don't have older versions
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    docker.io \
-    && rm -rf /var/lib/apt/lists/*
+    ca-certificates \
+    curl \
+    && rm -rf /var/lib/apt/lists/* \
+    && curl -fsSL https://download.docker.com/linux/static/stable/x86_64/docker-20.10.24.tgz -o docker.tgz \
+    && tar -xzf docker.tgz --strip-components=1 -C /usr/local/bin docker/docker \
+    && rm docker.tgz \
+    && chmod +x /usr/local/bin/docker
 
 # Copy requirements files first (for better caching)
 COPY requirements.txt /app/requirements.txt
@@ -46,4 +52,3 @@ WORKDIR /app/app
 
 # Run the Django development server
 CMD ["python", "manage.py", "runserver", "0.0.0.0:8000"]
-
