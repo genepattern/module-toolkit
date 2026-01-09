@@ -75,7 +75,7 @@ def run_test(gpunit_path: str, shared_context: dict) -> List[LintIssue]:
     if not isinstance(params, dict):
         return issues  # Structure validation will catch this
     
-    #Validate parameter types
+    # Validate parameter types
     for param_name, param_value in params.items():
         if param_name not in expected_param_types: continue
         expected_type = expected_param_types[param_name]
