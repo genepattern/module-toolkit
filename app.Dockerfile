@@ -44,11 +44,11 @@ RUN mkdir -p /app/generated-modules
 # Set the MODULE_TOOLKIT_PATH environment variable for the webapp
 ENV MODULE_TOOLKIT_PATH=/app
 
-# Expose port 8000 for the Django development server
-EXPOSE 8000
+# Expose port 8250 for the Django development server
+EXPOSE 8250
 
 # Set the working directory to the app folder for Django
 WORKDIR /app/app
 
 # Run the Django development server
-CMD ["python", "manage.py", "runserver", "0.0.0.0:8000"]
+CMD ["python", "manage.py", "runserver", "0.0.0.0:8250"]

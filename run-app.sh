@@ -6,7 +6,7 @@ set -e
 
 # Default values
 GENERATED_MODULES_DIR="${GENERATED_MODULES_DIR:-./generated-modules}"
-HOST_PORT="${HOST_PORT:-8000}"
+HOST_PORT="${HOST_PORT:-8250}"
 CONTAINER_NAME="${CONTAINER_NAME:-module-toolkit}"
 IMAGE_NAME="${IMAGE_NAME:-module-toolkit:latest}"
 
@@ -38,7 +38,7 @@ while [[ $# -gt 0 ]]; do
             echo ""
             echo "Options:"
             echo "  -d, --modules-dir DIR   Directory to mount for generated modules (default: ./generated-modules)"
-            echo "  -p, --port PORT         Host port to map to container port 8000 (default: 8000)"
+            echo "  -p, --port PORT         Host port to map to container port 8250 (default: 8250)"
             echo "  -n, --name NAME         Container name (default: module-toolkit)"
             echo "  -i, --image IMAGE       Docker image name (default: module-toolkit:latest)"
             echo "  --build                 Build the Docker image before running"
@@ -72,6 +72,17 @@ if docker ps -a --format '{{.Names}}' | grep -q "^${CONTAINER_NAME}$"; then
     docker rm "$CONTAINER_NAME" 2>/dev/null || true
 fi
 
+# Detect OS for stat command
+get_docker_gid() {
+    if [[ "$OSTYPE" == "darwin"* ]]; then
+        # macOS
+        stat -f '%g' /var/run/docker.sock
+    else
+        # Linux
+        stat -c '%g' /var/run/docker.sock
+    fi
+}
+
 echo "Starting container: $CONTAINER_NAME"
 echo "  - Generated modules directory: $GENERATED_MODULES_DIR"
 echo "  - Host port: $HOST_PORT"
@@ -80,10 +91,10 @@ echo "  - Docker socket mounted for image building"
 # Run the container
 docker run -d \
     --name "$CONTAINER_NAME" \
-    -p "${HOST_PORT}:8000" \
+    -p "${HOST_PORT}:8250" \
     -v "$GENERATED_MODULES_DIR:/app/generated-modules" \
     -v /var/run/docker.sock:/var/run/docker.sock \
-    --group-add $(stat -f '%g' /var/run/docker.sock) \
+    --group-add $(get_docker_gid) \
     -e MODULE_TOOLKIT_PATH=/app \
     --env-file .env \
     --env-file app/.env \
