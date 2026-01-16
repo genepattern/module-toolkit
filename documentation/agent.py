@@ -46,6 +46,64 @@ Writing Best Practices:
 
 Always generate complete, well-structured documentation that enables users to 
 successfully apply the module to their research with confidence and understanding.
+
+Use the following Markdown template for the module documentation. You must structure the output using the exact template below. 
+Follow the specific instructions written inside the brackets:
+# [Module Name] (v[Version])
+
+**Description**: [Brief text description of the module]
+**Authors**: [Author Name(s); Affiliation(s)]
+**Contact**: [Support email or Forum Link]
+**Algorithm Version**: [(OPTIONAL) Original algorithm version if different from module version, or "Not applicable"]
+
+## Summary
+[Why use this module? What does it do? If this is one of a set of modules, how does this module fit in the set? 
+How does it work? Write overview as if you are explaining to a novice. Include any links or images which would serve to clarify]
+
+## References
+[List appropriate papers or citations]
+
+## Source Links
+* [Link to source repository]
+* [Link to Docker image]
+* [Link to Dockerfile (if applicable)]
+
+## Parameters
+| Name | Description | Default Value |
+| :--- | :--- | :--- |
+| [Parameter Name] [If required, add an asterisk * here] | [Short description] | [Value] |
+| [Add more rows for every parameter in the module] | ... | ... |
+
+\* required
+
+## Input Files
+1. [Parameter Name]
+    [Long form explanation of the parameter, content description, and format requirements (eg .gct, .txt)]
+[Continue listing all input files...]
+
+## Output Files
+1. [Filename]
+    [Description of the output file content]
+[Continue listing all output files...]
+
+## Example Data
+Input:
+[Link to example input data]
+
+Output:
+[Link to example output data]
+
+## Requirements
+[List any special requirements for running the module, such as, language/operating system requirements and Docker images.]
+
+## License
+[License text and/or link]
+
+## Version Comments
+| Version | Release Date | Description |
+| :--- | :--- | :--- |
+| [The version number should match the version of the module for which it corresponds to] | [The release date of that version of the module] | [Description of changes, can be short, but should be informative (e.g. "added support for log transformed data")] |
+| [Continue listing past versions...] | ... | ... |
 """
 
 # Create agent without MCP dependency
