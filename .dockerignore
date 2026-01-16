@@ -1,0 +1,27 @@
+# Docker ignore file to exclude unnecessary files from the build context
+.git
+.gitignore
+.idea
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.so
+
+# Exclude .env files (sensitive configuration)
+.env
+app/.env
+
+# Exclude generated modules (will be mounted as volume)
+generated-modules/
+
+# Exclude documentation and test files
+*.md
+LICENSE
+
+# Exclude local development files
+.DS_Store
+*.swp
+*.swo
+

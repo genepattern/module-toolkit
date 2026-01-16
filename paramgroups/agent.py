@@ -269,19 +269,22 @@ def analyze_parameter_groupings(context: RunContext[str], parameters: List[Dict[
 
 
 @paramgroups_agent.tool
-def create_paramgroups(context: RunContext[str], tool_info: Dict[str, Any], planning_data: ModulePlan, error_report: str = "", attempt: int = 1) -> str:
+def create_paramgroups(context: RunContext[str]) -> str:
     """
     Generate a valid paramgroups.json file based on the provided tool information and planning data.
 
     Args:
-        tool_info: Dictionary containing tool metadata (name, version, etc.)
-        planning_data: ModulePlan object containing the module plan and parameter definitions.
-        error_report: Optional string containing error feedback from previous validation attempts.
-        attempt: The current attempt number for generation.
+        context: RunContext with dependencies containing tool_info, planning_data, error_report, and attempt
 
     Returns:
         A string containing the complete and valid paramgroups.json content.
     """
+    # Extract data from context dependencies
+    tool_info = context.deps.get('tool_info', {})
+    planning_data_raw = context.deps.get('planning_data', {})
+    error_report = context.deps.get('error_report', '')
+    attempt = context.deps.get('attempt', 1)
+
     print(f"📋 PARAMGROUPS TOOL: Running create_paramgroups for {tool_info.get('name', 'Unknown Tool')} (attempt {attempt})")
 
     # Extract tool information including instructions
@@ -290,19 +293,27 @@ def create_paramgroups(context: RunContext[str], tool_info: Dict[str, Any], plan
     if tool_instructions:
         print(f"✓ User provided instructions: {tool_instructions[:100]}...")
 
-    # Extract parameters from planning data (ModulePlan object)
-    if not planning_data.parameters:
-        print("⚠️ PARAMGROUPS TOOL: No parameters found in planning_data. Generating empty paramgroups.")
+    # Handle both ModulePlan object and dict
+    if hasattr(planning_data_raw, 'parameters'):
+        # It's a ModulePlan object
+        if not planning_data_raw.parameters:
+            print("⚠️ PARAMGROUPS TOOL: No parameters found in planning_data. Generating empty paramgroups.")
+            return "[]"
+        parameters = [p.model_dump() for p in planning_data_raw.parameters]
+        planning_data_dict = planning_data_raw.model_dump()
+    elif isinstance(planning_data_raw, dict):
+        # It's already a dict
+        if not planning_data_raw.get('parameters'):
+            print("⚠️ PARAMGROUPS TOOL: No parameters found in planning_data. Generating empty paramgroups.")
+            return "[]"
+        parameters = planning_data_raw['parameters']
+        planning_data_dict = planning_data_raw
+    else:
+        print("⚠️ PARAMGROUPS TOOL: Invalid planning_data format. Generating empty paramgroups.")
         return "[]"
-
-    # Convert ModulePlan parameters to dictionary format for analysis
-    parameters = [p.model_dump() for p in planning_data.parameters]
 
     # Use the analyze_parameter_groupings tool to get a suggested structure
     grouping_analysis = analyze_parameter_groupings(context, parameters)
-
-    # Convert planning_data to dictionary format for the prompt
-    planning_data_dict = planning_data.model_dump()
 
     # Build the generation prompt with all the necessary information
     generation_info = f"""

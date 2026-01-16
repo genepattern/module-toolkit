@@ -55,6 +55,10 @@ Assertion Strategies:
 - Verify error messages for invalid inputs
 - Check execution time and resource usage where relevant
 
+Output Instructions:
+- Strictly create a separate YAML file for each distinct test case
+- Don't combine multiple tests into a single file.
+
 Always generate complete, valid GPUnit test files that provide thorough validation
 of module functionality and can be executed reliably in automated testing environments.
 """
@@ -593,19 +597,22 @@ def optimize_test_coverage(context: RunContext[str], existing_tests: List[Dict[s
 
 
 @gpunit_agent.tool
-def create_gpunit(context: RunContext[str], tool_info: Dict[str, Any], planning_data: Dict[str, Any], error_report: str = "", attempt: int = 1) -> str:
+def create_gpunit(context: RunContext[str]) -> str:
     """
     Generate a comprehensive GPUnit test definition (test.yml) for the GenePattern module.
     
     Args:
-        tool_info: Dictionary with tool information (name, version, language, description)
-        planning_data: Planning phase results with parameters and context
-        error_report: Optional error feedback from previous validation attempts
-        attempt: Attempt number for retry logic
-    
+        context: RunContext with dependencies containing tool_info, planning_data, error_report, and attempt
+
     Returns:
         Complete GPUnit YAML content ready for validation
     """
+    # Extract data from context dependencies
+    tool_info = context.deps.get('tool_info', {})
+    planning_data = context.deps.get('planning_data', {})
+    error_report = context.deps.get('error_report', '')
+    attempt = context.deps.get('attempt', 1)
+
     print(f"🧪 GPUNIT TOOL: Running create_gpunit for '{tool_info.get('name', 'unknown')}' (attempt {attempt})")
     
     try:
@@ -623,19 +630,20 @@ def create_gpunit(context: RunContext[str], tool_info: Dict[str, Any], planning_
         cpu_cores = planning_data.get('cpu_cores', 1) if planning_data else 1
         memory = planning_data.get('memory', '2GB') if planning_data else '2GB'
         wrapper_script = planning_data.get('wrapper_script', 'wrapper.py') if planning_data else 'wrapper.py'
+        module_name = planning_data.get('module_name', tool_name) if planning_data else tool_name
+
+        # IMPORTANT: Use LSID from planning_data
+        module_lsid = planning_data.get('lsid', f"urn:lsid:genepattern.org:module.analysis:{tool_name.lower().replace(' ', '').replace('-', '')}:1") if planning_data else f"urn:lsid:genepattern.org:module.analysis:{tool_name.lower().replace(' ', '').replace('-', '')}:1"
 
         # Log planning data usage
         print(f"✓ Using {len(parameters)} parameters from planning_data")
+        print(f"✓ Using module LSID from planning_data: {module_lsid}")
         if input_formats:
             print(f"✓ Using input_file_formats from planning_data: {input_formats}")
         if description:
             print(f"✓ Using description from planning_data for test naming")
         print(f"✓ Using resource requirements: {cpu_cores} cores, {memory}")
         print(f"✓ Using wrapper_script: {wrapper_script}")
-
-        # Module LSID generation
-        tool_name = tool_info.get('name', 'UnknownTool')
-        module_lsid = f"urn:lsid:genepattern.org:module.analysis:{tool_name.lower().replace(' ', '').replace('-', '')}:1"
 
         # Determine primary file extension from input_file_formats
         primary_extension = 'txt'  # Default
@@ -644,11 +652,15 @@ def create_gpunit(context: RunContext[str], tool_info: Dict[str, Any], planning_
             primary_extension = input_formats[0].lstrip('.')
             print(f"✓ Using primary file extension for test data: .{primary_extension}")
 
-        # Build test parameters from module parameters with intelligent defaults
+        # Build test parameters ONLY for REQUIRED parameters
         test_params = {}
         test_description_hints = []
 
-        for param in parameters:
+        # Filter to only required parameters
+        required_params = [p for p in parameters if p.get('required', False)]
+        print(f"✓ Including only {len(required_params)} required parameters (out of {len(parameters)} total)")
+
+        for param in required_params:
             param_name = param.get('name', 'unknown')
             param_type = param.get('type', 'text')
             # Normalize param_type to lowercase for case-insensitive comparison
@@ -697,7 +709,7 @@ def create_gpunit(context: RunContext[str], tool_info: Dict[str, Any], planning_
 
         # Ensure params is never empty - add a default parameter if needed
         if not test_params:
-            print("⚠️  No parameters found, adding default input.file parameter")
+            print("⚠️  No required parameters found, adding default input.file parameter")
             test_params['input.file'] = f"test_data/sample.{primary_extension}"
 
         # Generate test name from description or tool name
@@ -716,12 +728,13 @@ def create_gpunit(context: RunContext[str], tool_info: Dict[str, Any], planning_
             elif 'variant' in desc_lower:
                 test_scenario = "Variant Calling Test"
 
-        # Generate GPUnit YAML content
-        gpunit_content = f"""# GPUnit test for {tool_name}
+        # Generate GPUnit YAML content - SINGLE TEST ONLY
+        gpunit_content = f"""# GPUnit test for {module_name}
 # Generated from planning data - {', '.join(test_description_hints[:3]) if test_description_hints else 'basic test'}
 # Resource requirements: {cpu_cores} CPU cores, {memory} memory
-name: "{tool_name} - {test_scenario}"
-module: {module_lsid}
+# NOTE: This is a single test with required parameters only
+name: "{module_name} - {test_scenario}"
+module: {module_name}
 params:
 """
 
@@ -732,7 +745,7 @@ params:
         # Generate assertions based on expected outputs
         # Try to identify output file parameters
         output_files = []
-        for param in parameters:
+        for param in required_params:
             param_name = param.get('name', 'unknown')
             param_type = param.get('type', 'Text')
 

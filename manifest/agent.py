@@ -480,19 +480,22 @@ def optimize_command_line_template(context: RunContext[str], current_command: st
 
 
 @manifest_agent.tool
-def create_manifest(context: RunContext[str], tool_info: Dict[str, Any] = None, planning_data: Dict[str, Any] = None, error_report: str = "", attempt: int = 1) -> Dict[str, Any]:
+def create_manifest(context: RunContext[str]) -> Dict[str, Any]:
     """
     Generate a complete manifest file for the GenePattern module.
     
     Args:
-        tool_info: Dictionary with tool information (name, version, language, description)
-        planning_data: Planning phase results with parameters and context
-        error_report: Optional error feedback from previous validation attempts
-        attempt: Attempt number for retry logic
-    
+        context: RunContext with dependencies containing tool_info, planning_data, error_report, and attempt
+
     Returns:
         Dictionary with manifest fields ready to be converted to ManifestModel
     """
+    # Extract data from context dependencies
+    tool_info = context.deps.get('tool_info', {})
+    planning_data = context.deps.get('planning_data', {})
+    error_report = context.deps.get('error_report', '')
+    attempt = context.deps.get('attempt', 1)
+
     print(f"📋 MANIFEST TOOL: Running create_manifest (attempt {attempt})")
     
     # Handle string inputs from agent calls and parse planning_data
@@ -655,9 +658,15 @@ def create_manifest(context: RunContext[str], tool_info: Dict[str, Any] = None, 
         if attempt > 1 and error_report:
             print(f"⚠️ Retry attempt {attempt} - previous error: {error_report[:100]}")
 
-        # Generate LSID
-        lsid_object = tool_name.lower().replace(' ', '').replace('.', '').replace('_', '')
-        lsid = f"urn:lsid:genepattern.org:module.analysis:{lsid_object}:1"
+        # Generate LSID - use from planning_data if available, otherwise generate fallback
+        if planning_dict and 'lsid' in planning_dict and planning_dict['lsid']:
+            lsid = planning_dict['lsid']
+            print(f"✓ Using LSID from planning_data: {lsid}")
+        else:
+            # Fallback: generate a basic LSID if not provided in planning_data
+            lsid_object = tool_name.lower().replace(' ', '').replace('.', '').replace('_', '')
+            lsid = f"urn:lsid:genepattern.org:module.analysis:{lsid_object}:1"
+            print(f"⚠️ LSID not in planning_data, using fallback: {lsid}")
 
         # Convert planning_data parameters to manifest parameter format
         manifest_parameters = {}
@@ -739,7 +748,7 @@ def create_manifest(context: RunContext[str], tool_info: Dict[str, Any] = None, 
                 if 'prefix' in param and param['prefix']:
                     manifest_param['prefix_when_specified'] = param['prefix']
 
-                # Add numValues based on value_count
+                # Add numValues based on value_count (now in correct manifest format)
                 if 'value_count' in param and param['value_count']:
                     manifest_param['numValues'] = param['value_count']
                 elif param.get('required', False):
@@ -774,6 +783,7 @@ def create_manifest(context: RunContext[str], tool_info: Dict[str, Any] = None, 
             "categories": categories_str,
             "commandLine": command_line,
             "language": tool_language,
+            "taskType": tool_language,  # Required field: taskType should match the language
             "os": "any",
             "cpuType": "any",
             "taskDoc": "README.md",

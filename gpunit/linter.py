@@ -79,6 +79,13 @@ Examples:
         nargs="*",
         help="List of expected parameter names for validation (optional)"
     )
+    p.add_argument(
+        "--types",
+        nargs="*",
+        choices=["text", "number", "file"],
+        help="List of parameter types corresponding to --parameters (text, number, file)"
+    )
+
     return p.parse_args(argv)
 
 
@@ -117,7 +124,16 @@ def discover_tests() -> List[str]:
         return []
     
     test_files = glob.glob(os.path.join(tests_dir, "test_*.py"))
-    return sorted(test_files)
+    
+    # Priority order (based off of GPUnit README)
+    priority_filenames = ["test_file_validation.py","test_structure_validation.py", 
+                          "test_module_validation.py","test_parameter_validation.py"]
+    def sort_key(filepath):
+        filename = os.path.basename(filepath)
+        if filename in priority_filenames:
+            return priority_filenames.index(filename)
+        return len(priority_filenames) + 1
+    return sorted(test_files, key=sort_key)
 
 
 def run_modular_tests(gpunit_path: str, **test_kwargs) -> Tuple[bool, List[LintIssue]]:
@@ -233,10 +249,23 @@ def main(argv: List[str]) -> int:
             print(f"ERROR: File or directory does not exist: '{args.path}'")
         return 1
     
+    # Validate that types match parameters if provided
+    expected_param_types = {}
+    if args.types:
+        if not args.parameters:
+            print("ERROR: --types argument requires --parameters argument")
+            return 1
+        if len(args.parameters) != len(args.types):
+            print(f"ERROR: Number of --types ({len(args.types)}) must match number of --parameters ({len(args.parameters)})")
+            return 1
+        # Map parameters to types
+        expected_param_types = dict(zip(args.parameters, args.types))
+    
     # Prepare test context - pass all CLI arguments to tests
     test_kwargs = {
         'expected_module': args.module,  # May be None
         'expected_parameters': args.parameters,  # May be None or empty list
+        'expected_param_types': expected_param_types
     }
     
     # Process each GPUnit file

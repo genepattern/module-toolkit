@@ -793,19 +793,22 @@ def optimize_wrapper_performance(context: RunContext[str], wrapper_content: str,
 
 
 @wrapper_agent.tool
-def create_wrapper(context: RunContext[str], tool_info: Dict[str, Any], planning_data: Dict[str, Any], error_report: str = "", attempt: int = 1) -> str:
+def create_wrapper(context: RunContext[str]) -> str:
     """
     Generate a comprehensive wrapper script for the GenePattern module using planning data.
 
     Args:
-        tool_info: Dictionary with tool information (name, version, language, description)
-        planning_data: Planning phase results with parameters and all module specifications
-        error_report: Optional error feedback from previous validation attempts
-        attempt: Attempt number for retry logic
+        context: RunContext with dependencies containing tool_info, planning_data, error_report, and attempt
 
     Returns:
         Complete wrapper script content ready for validation
     """
+    # Extract data from context dependencies
+    tool_info = context.deps.get('tool_info', {})
+    planning_data = context.deps.get('planning_data', {})
+    error_report = context.deps.get('error_report', '')
+    attempt = context.deps.get('attempt', 1)
+
     print(f"🔧 WRAPPER TOOL: Running create_wrapper (attempt {attempt})")
 
     # Extract tool information

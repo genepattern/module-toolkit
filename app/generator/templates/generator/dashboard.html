@@ -1,0 +1,644 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Dashboard - GenePattern Module Generator</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.2.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <style>
+        body {
+            background-color: #f8f9fa;
+        }
+        .navbar {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        }
+        .sidebar {
+            background-color: #fff;
+            border-right: 1px solid #dee2e6;
+            min-height: calc(100vh - 56px);
+            overflow-y: auto;
+        }
+        .module-item {
+            padding: 0.75rem 1rem;
+            border-bottom: 1px solid #eee;
+            cursor: pointer;
+            transition: background-color 0.2s;
+        }
+        .module-item:hover {
+            background-color: #f8f9fa;
+        }
+        .module-item.running {
+            background-color: #fff3cd;
+        }
+        .status-icon {
+            font-size: 1rem;
+            cursor: help;
+        }
+        .status-success { color: #198754; }
+        .status-error { color: #dc3545; }
+        .status-progress { color: #ffc107; }
+        .status-running { color: #0d6efd; }
+        .status-unknown { color: #6c757d; }
+        .form-section {
+            background: #fff;
+            border-radius: 0.5rem;
+            padding: 1.5rem;
+            box-shadow: 0 0.125rem 0.25rem rgba(0,0,0,0.075);
+        }
+        .run-counter {
+            font-size: 0.875rem;
+        }
+        #statusSpinner {
+            display: none;
+        }
+        .file-item {
+            padding: 0.5rem 1rem;
+            border-bottom: 1px solid #eee;
+            cursor: pointer;
+        }
+        .file-item:hover {
+            background-color: #f8f9fa;
+        }
+        .file-item:last-child {
+            border-bottom: none;
+        }
+        #statusText {
+            cursor: pointer;
+        }
+        #statusText:hover {
+            text-decoration: underline;
+        }
+        .console-output {
+            background-color: #1e1e1e;
+            color: #d4d4d4;
+            font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+            font-size: 0.85rem;
+            padding: 1rem;
+            border-radius: 0.25rem;
+            max-height: 500px;
+            overflow-y: auto;
+            white-space: pre-wrap;
+            word-wrap: break-word;
+        }
+        @keyframes spin {
+            from { transform: rotate(0deg); }
+            to { transform: rotate(360deg); }
+        }
+        .spinning {
+            animation: spin 1s linear infinite;
+            display: inline-block;
+        }
+    </style>
+</head>
+<body>
+    <nav class="navbar navbar-dark">
+        <div class="container-fluid">
+            <span class="navbar-brand mb-0 h1">🧬 GenePattern Module Generator</span>
+            <div class="d-flex align-items-center">
+                <span class="text-white me-3">{{ username }}</span>
+                <a href="{% url 'logout' %}" class="btn btn-outline-light btn-sm">Logout</a>
+            </div>
+        </div>
+    </nav>
+
+    <div class="container-fluid">
+        <div class="row">
+            <!-- Left Column - Module List -->
+            <div class="col-md-3 sidebar p-0">
+                <div class="p-3 border-bottom bg-light">
+                    <h6 class="mb-0">Generated Modules</h6>
+                    <small class="text-muted run-counter">Runs: {{ run_count }} / {{ max_runs }}</small>
+                </div>
+                <div id="moduleList">
+                    {% if modules %}
+                        {% for module in modules %}
+                        <div class="module-item {% if module.status == 'running' %}running{% endif %}" data-module="{{ module.name }}" data-status="{{ module.status }}" onclick="showModuleFiles('{{ module.name }}')">
+                            <div class="d-flex justify-content-between align-items-center">
+                                <span class="text-truncate" style="max-width: 200px;" title="{{ module.name }}">{{ module.name }}</span>
+                                <span class="status-icon {% if module.status == 'success' %}status-success" title="Success">✅{% elif module.status == 'error' %}status-error" title="Failed">❌{% elif module.status == 'running' %}status-running" title="Running"><span class="spinning">🔄</span>{% elif module.status == 'in_progress' %}status-progress" title="In Progress">⏳{% else %}status-unknown" title="Unknown">❓{% endif %}</span>
+                            </div>
+                        </div>
+                        {% endfor %}
+                    {% else %}
+                        <div class="p-3 text-muted text-center" id="noModulesMsg">
+                            <em>No modules generated yet</em>
+                        </div>
+                    {% endif %}
+                </div>
+            </div>
+
+            <!-- Right Column - Form -->
+            <div class="col-md-9 p-4">
+                <div class="form-section">
+                    <h4 class="mb-4">Create GenePattern Module</h4>
+
+                    <div id="alertContainer"></div>
+
+                    <form id="generateForm">
+                        {% csrf_token %}
+
+                        <div class="row mb-3">
+                            <div class="col-md-6">
+                                <label for="name" class="form-label">Tool Name <span class="text-danger">*</span></label>
+                                <input type="text" class="form-control" id="name" name="name"
+                                       placeholder="e.g., samtools, bwa, star" required>
+                                <div class="form-text">The name of the bioinformatics tool</div>
+                            </div>
+                            <div class="col-md-6">
+                                <label for="version" class="form-label">Version</label>
+                                <input type="text" class="form-control" id="version" name="version"
+                                       placeholder="e.g., 1.0, latest">
+                                <div class="form-text">Tool version (optional, defaults to "latest")</div>
+                            </div>
+                        </div>
+
+                        <div class="row mb-3">
+                            <div class="col-md-6">
+                                <label for="language" class="form-label">Primary Language</label>
+                                <select class="form-select" id="language" name="language">
+                                    <option value="">Select language...</option>
+                                    <option value="python">Python</option>
+                                    <option value="r">R</option>
+                                    <option value="java">Java</option>
+                                    <option value="bash">Bash/Shell</option>
+                                    <option value="perl">Perl</option>
+                                    <option value="c">C</option>
+                                    <option value="cpp">C++</option>
+                                    <option value="other">Other</option>
+                                </select>
+                            </div>
+                            <div class="col-md-6">
+                                <label for="dev_mode" class="form-label">Dev Mode</label>
+                                <select class="form-select" id="dev_mode" name="dev_mode">
+                                    <option value="on" selected>On (save intermediate files)</option>
+                                    <option value="off">Off</option>
+                                </select>
+                                <div class="form-text">Saves research, plan, and status files</div>
+                            </div>
+                        </div>
+
+                        <div class="mb-3">
+                            <label for="description" class="form-label">Description</label>
+                            <textarea class="form-control" id="description" name="description" rows="2"
+                                      placeholder="Brief description of the tool and its purpose"></textarea>
+                        </div>
+
+                        <div class="row mb-3">
+                            <div class="col-md-6">
+                                <label for="repository_url" class="form-label">Repository URL</label>
+                                <input type="url" class="form-control" id="repository_url" name="repository_url"
+                                       placeholder="https://github.com/...">
+                            </div>
+                            <div class="col-md-6">
+                                <label for="documentation_url" class="form-label">Documentation URL</label>
+                                <input type="url" class="form-control" id="documentation_url" name="documentation_url"
+                                       placeholder="https://...">
+                            </div>
+                        </div>
+
+                        <div class="mb-3">
+                            <label for="instructions" class="form-label">Additional Instructions</label>
+                            <textarea class="form-control" id="instructions" name="instructions" rows="3"
+                                      placeholder="Any specific instructions for module generation (e.g., which features to expose, which functions to wrap)"></textarea>
+                        </div>
+
+                        <div class="mb-4">
+                            <label for="resume" class="form-label">Resume Previous Run</label>
+                            <select class="form-select" id="resume" name="resume">
+                                <option value="">Start new run</option>
+                                {% for module_name in resumable_modules %}
+                                <option value="{{ module_name }}">{{ module_name }}</option>
+                                {% endfor %}
+                            </select>
+                            <div class="form-text">Select a previous run to resume from where it left off</div>
+                        </div>
+
+                        <div class="d-flex align-items-center">
+                            <button type="submit" class="btn btn-primary btn-lg" id="generateBtn">
+                                <span id="btnText">Generate Module</span>
+                                <span id="statusSpinner" class="spinner-border spinner-border-sm ms-2" role="status">
+                                    <span class="visually-hidden">Loading...</span>
+                                </span>
+                            </button>
+                            <span id="statusText" class="ms-3 text-muted" onclick="showConsoleModal()" title="Click to view console output"></span>
+                        </div>
+                    </form>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Module Files Modal -->
+    <div class="modal fade" id="filesModal" tabindex="-1">
+        <div class="modal-dialog modal-lg">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title" id="filesModalTitle">Module Files</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body p-0">
+                    <div id="filesList"></div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Console Output Modal -->
+    <div class="modal fade" id="consoleModal" tabindex="-1">
+        <div class="modal-dialog modal-xl">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title">Console Output - <span id="consoleModuleName"></span></h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <div id="consoleOutput" class="console-output">Waiting for output...</div>
+                </div>
+                <div class="modal-footer">
+                    <span id="consoleStatus" class="me-auto text-muted"></span>
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Error Modal -->
+    <div class="modal fade" id="errorModal" tabindex="-1">
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <div class="modal-header bg-danger text-white">
+                    <h5 class="modal-title">Error</h5>
+                    <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <p id="errorMessage"></p>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.2.3/dist/js/bootstrap.bundle.min.js"></script>
+    <script>
+        const csrfToken = document.querySelector('[name=csrfmiddlewaretoken]').value;
+        let currentModule = null;
+        let pollInterval = null;
+        let consoleOffset = 0;
+        let consoleModalInstance = null;
+        let isConsoleModalOpen = false;
+
+        // Add event listeners for console modal to track its state
+        document.addEventListener('DOMContentLoaded', function() {
+            const consoleModalElement = document.getElementById('consoleModal');
+            if (consoleModalElement) {
+                consoleModalElement.addEventListener('shown.bs.modal', function() {
+                    isConsoleModalOpen = true;
+                });
+                consoleModalElement.addEventListener('hidden.bs.modal', function() {
+                    isConsoleModalOpen = false;
+                });
+            }
+        });
+
+        // Form submission
+        document.getElementById('generateForm').addEventListener('submit', async function(e) {
+            e.preventDefault();
+
+            const formData = new FormData(this);
+            const generateBtn = document.getElementById('generateBtn');
+            const btnText = document.getElementById('btnText');
+            const spinner = document.getElementById('statusSpinner');
+            const statusText = document.getElementById('statusText');
+
+            // Disable button and show spinner
+            generateBtn.disabled = true;
+            spinner.style.display = 'inline-block';
+            btnText.textContent = 'Starting...';
+            statusText.textContent = '';
+            consoleOffset = 0;
+
+            try {
+                const response = await fetch('{% url "generate" %}', {
+                    method: 'POST',
+                    body: formData,
+                    headers: {
+                        'X-CSRFToken': csrfToken
+                    }
+                });
+
+                const data = await response.json();
+
+                if (!response.ok) {
+                    throw new Error(data.error || 'An error occurred');
+                }
+
+                currentModule = data.module;
+                btnText.textContent = 'Generating...';
+                statusText.textContent = '🔄 Module generation in progress...';
+                statusText.style.cursor = 'pointer';
+
+                // Add the running module to the sidebar
+                addRunningModuleToSidebar(currentModule);
+
+                // Automatically show the console modal
+                showConsoleModal();
+
+                // Start polling for status
+                startPolling(currentModule);
+
+            } catch (error) {
+                showError(error.message);
+                resetButton();
+            }
+        });
+
+        function addRunningModuleToSidebar(moduleName) {
+            const moduleList = document.getElementById('moduleList');
+            const noModulesMsg = document.getElementById('noModulesMsg');
+
+            // Remove "no modules" message if present
+            if (noModulesMsg) {
+                noModulesMsg.remove();
+            }
+
+            // Check if module already exists in sidebar
+            const existing = moduleList.querySelector(`[data-module="${moduleName}"]`);
+            if (existing) {
+                existing.classList.add('running');
+                existing.dataset.status = 'running';
+                const statusIcon = existing.querySelector('.status-icon');
+                statusIcon.className = 'status-icon status-running';
+                statusIcon.title = 'Running';
+                statusIcon.innerHTML = '<span class="spinning">🔄</span>';
+                return;
+            }
+
+            // Create new module item
+            const moduleItem = document.createElement('div');
+            moduleItem.className = 'module-item running';
+            moduleItem.dataset.module = moduleName;
+            moduleItem.dataset.status = 'running';
+            moduleItem.onclick = () => showModuleFiles(moduleName);
+            moduleItem.innerHTML = `
+                <div class="d-flex justify-content-between align-items-center">
+                    <span class="text-truncate" style="max-width: 200px;" title="${moduleName}">${moduleName}</span>
+                    <span class="status-icon status-running" title="Running"><span class="spinning">🔄</span></span>
+                </div>
+            `;
+
+            // Insert at the top
+            moduleList.insertBefore(moduleItem, moduleList.firstChild);
+        }
+
+        function updateModuleStatus(moduleName, status) {
+            const moduleItem = document.querySelector(`[data-module="${moduleName}"]`);
+            if (!moduleItem) return;
+
+            moduleItem.classList.remove('running');
+            moduleItem.dataset.status = status;
+            const statusIcon = moduleItem.querySelector('.status-icon');
+
+            if (status === 'success') {
+                statusIcon.className = 'status-icon status-success';
+                statusIcon.title = 'Success';
+                statusIcon.innerHTML = '✅';
+            } else if (status === 'error') {
+                statusIcon.className = 'status-icon status-error';
+                statusIcon.title = 'Failed';
+                statusIcon.innerHTML = '❌';
+            } else if (status === 'running') {
+                statusIcon.className = 'status-icon status-running';
+                statusIcon.title = 'Running';
+                statusIcon.innerHTML = '<span class="spinning">🔄</span>';
+            } else {
+                statusIcon.className = 'status-icon status-unknown';
+                statusIcon.title = 'Unknown';
+                statusIcon.innerHTML = '❓';
+            }
+        }
+
+        function startPolling(moduleName) {
+            if (pollInterval) clearInterval(pollInterval);
+
+            // Initial poll after a short delay to let the script start
+            setTimeout(() => pollStatus(moduleName), 2000);
+
+            pollInterval = setInterval(() => pollStatus(moduleName), 10000); // Poll every 10 seconds
+        }
+
+        async function pollStatus(moduleName) {
+            try {
+                // First, try to find the actual module directory by scanning for new directories
+                const actualModule = await findActualModule(moduleName);
+
+                if (actualModule && actualModule !== moduleName) {
+                    // Update tracking to use the actual module name
+                    updateModuleNameInSidebar(moduleName, actualModule);
+                    currentModule = actualModule;
+                    moduleName = actualModule;
+                }
+
+                // Poll status
+                const response = await fetch(`/status/${moduleName}/`);
+                const data = await response.json();
+
+                // Also fetch console log updates if modal is open
+                if (isConsoleModalOpen) {
+                    await updateConsoleLog(moduleName);
+                }
+
+                // Check if completed (not running anymore)
+                if (!data.running && (data.status === 'success' || data.status === 'error')) {
+                    clearInterval(pollInterval);
+                    pollInterval = null;
+
+                    // Update sidebar status
+                    updateModuleStatus(moduleName, data.status);
+
+                    // Final console update
+                    await updateConsoleLog(moduleName);
+
+                    // Update button and status text
+                    const statusText = document.getElementById('statusText');
+                    if (data.status === 'success') {
+                        statusText.textContent = '✅ Module generation completed successfully!';
+                    } else {
+                        statusText.textContent = '❌ Module generation failed. Click to view console.';
+                    }
+
+                    resetButton();
+
+                    // Show files modal
+                    showModuleFiles(moduleName);
+                }
+            } catch (error) {
+                console.error('Polling error:', error);
+            }
+        }
+
+        async function findActualModule(expectedModule) {
+            // Try to find the actual module by checking for directories that match the pattern
+            // This handles the case where the script creates a directory with a slightly different timestamp
+            try {
+                const response = await fetch(`/status/${expectedModule}/`);
+                const data = await response.json();
+
+                // If found or running, use the expected name
+                if (data.status !== 'not_found') {
+                    return expectedModule;
+                }
+
+                // Otherwise, try to find a matching directory by scanning the module list
+                // The server will return the actual running module in the list
+                const listResponse = await fetch('/');
+                const html = await listResponse.text();
+
+                // Parse the HTML to find module names that start with the same tool name
+                const toolPrefix = expectedModule.split('_').slice(0, -2).join('_'); // Remove timestamp parts
+                const regex = new RegExp(`data-module="(${toolPrefix}_\\d{8}_\\d{6})"`, 'g');
+                let match;
+                let latestModule = null;
+
+                while ((match = regex.exec(html)) !== null) {
+                    const foundModule = match[1];
+                    if (!latestModule || foundModule > latestModule) {
+                        latestModule = foundModule;
+                    }
+                }
+
+                return latestModule || expectedModule;
+            } catch (error) {
+                return expectedModule;
+            }
+        }
+
+        function updateModuleNameInSidebar(oldName, newName) {
+            const moduleItem = document.querySelector(`[data-module="${oldName}"]`);
+            if (moduleItem) {
+                moduleItem.dataset.module = newName;
+                moduleItem.onclick = () => showModuleFiles(newName);
+                const nameSpan = moduleItem.querySelector('.text-truncate');
+                if (nameSpan) {
+                    nameSpan.textContent = newName;
+                    nameSpan.title = newName;
+                }
+            }
+        }
+
+        async function updateConsoleLog(moduleName) {
+            try {
+                const response = await fetch(`/console/${moduleName}/?offset=${consoleOffset}`);
+                const data = await response.json();
+
+                if (data.content) {
+                    const consoleOutput = document.getElementById('consoleOutput');
+                    if (consoleOffset === 0) {
+                        consoleOutput.textContent = data.content;
+                    } else {
+                        consoleOutput.textContent += data.content;
+                    }
+                    // Auto-scroll to bottom
+                    consoleOutput.scrollTop = consoleOutput.scrollHeight;
+                }
+
+                consoleOffset = data.offset;
+                document.getElementById('consoleStatus').textContent = `Log size: ${formatBytes(data.total_size)}`;
+            } catch (error) {
+                console.error('Console log error:', error);
+            }
+        }
+
+        function showConsoleModal() {
+            if (!currentModule) return;
+
+            document.getElementById('consoleModuleName').textContent = currentModule;
+            document.getElementById('consoleOutput').textContent = 'Loading...';
+
+            consoleModalInstance = new bootstrap.Modal(document.getElementById('consoleModal'));
+            consoleModalInstance.show();
+
+            // Fetch initial console content
+            consoleOffset = 0;
+            updateConsoleLog(currentModule);
+        }
+
+        function resetButton() {
+            const generateBtn = document.getElementById('generateBtn');
+            const btnText = document.getElementById('btnText');
+            const spinner = document.getElementById('statusSpinner');
+
+            generateBtn.disabled = false;
+            spinner.style.display = 'none';
+            btnText.textContent = 'Generate Module';
+        }
+
+        function showError(message) {
+            document.getElementById('errorMessage').textContent = message;
+            const errorModal = new bootstrap.Modal(document.getElementById('errorModal'));
+            errorModal.show();
+        }
+
+        async function showModuleFiles(moduleName) {
+            try {
+                const response = await fetch(`/files/${moduleName}/`);
+                const data = await response.json();
+
+                document.getElementById('filesModalTitle').textContent = moduleName;
+
+                const filesList = document.getElementById('filesList');
+                if (data.files.length === 0) {
+                    filesList.innerHTML = '<div class="p-3 text-muted text-center">No files found</div>';
+                } else {
+                    filesList.innerHTML = data.files.map(file => `
+                        <a href="/download/${moduleName}/${file.name}/" class="file-item d-flex justify-content-between align-items-center text-decoration-none text-dark">
+                            <span>📄 ${file.name}</span>
+                            <span class="text-muted small">${formatBytes(file.size)}</span>
+                        </a>
+                    `).join('');
+                }
+
+                const modal = new bootstrap.Modal(document.getElementById('filesModal'));
+                modal.show();
+
+            } catch (error) {
+                showError('Failed to load module files');
+            }
+        }
+
+        function formatBytes(bytes) {
+            if (bytes === 0) return '0 B';
+            const k = 1024;
+            const sizes = ['B', 'KB', 'MB', 'GB'];
+            const i = Math.floor(Math.log(bytes) / Math.log(k));
+            return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
+        }
+
+        // Handle resume dropdown change
+        document.getElementById('resume').addEventListener('change', function() {
+            const nameInput = document.getElementById('name');
+            if (this.value) {
+                // When resuming, name is optional
+                nameInput.removeAttribute('required');
+                nameInput.value = '';
+                nameInput.placeholder = 'Not needed when resuming';
+            } else {
+                nameInput.setAttribute('required', 'required');
+                nameInput.placeholder = 'e.g., samtools, bwa, star';
+            }
+        });
+
+        // Check URL params for auto-opening a module
+        const urlParams = new URLSearchParams(window.location.search);
+        const openModule = urlParams.get('open');
+        if (openModule) {
+            showModuleFiles(openModule);
+        }
+    </script>
+</body>
+</html>
+

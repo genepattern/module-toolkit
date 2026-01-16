@@ -103,7 +103,7 @@ class ModuleGenerationStatus:
             usage = result.usage()
             if usage:
                 self.input_tokens += usage.input_tokens or 0
-                self.output_tokens += usage.output_tokens or 0
+                self.output_tokens += usage.outputTokens or 0
         except Exception:
             # If usage tracking fails, continue without crashing
             pass
@@ -444,17 +444,36 @@ Generate a complete, valid manifest file in key=value format."""
                     if tool_info.get('instructions'):
                         instructions_section = f"\n\nIMPORTANT - Additional Instructions:\n{tool_info['instructions']}\n"
 
-                    # For other artifacts, use the tool-based prompt
-                    prompt = f"""Use the {create_method} tool with the following parameters:
-                - tool_info: {tool_info}
-                - planning_data: {planning_data_dict}
-                - error_report: {error_report}
-                - attempt: {attempt}{instructions_section}
+                    # For other artifacts, use a simpler prompt that instructs the LLM to call the tool
+                    prompt = f"""Generate the {artifact_name} artifact for the GenePattern module '{tool_info['name']}'.
 
-                Generate the {artifact_name} artifact for {tool_info['name']}."""
+{"Previous attempt failed with error: " + error_report if error_report else ""}
+
+This is attempt {attempt} of {max_loops}.{instructions_section}
+
+Call the {create_method} tool with the following parameters:
+- tool_info: Use the tool information provided
+- planning_data: Use the planning data provided
+- error_report: {repr(error_report)}
+- attempt: {attempt}.
+Make sure the generated artifact follows all guidelines, key requirements and critical rules and edit what the tool gave you as needed."""
+
+                # Create a dependency context that includes tool_info and planning_data
+                # This makes them automatically available to tool functions via RunContext
+                deps_context = {
+                    'tool_info': tool_info,
+                    'planning_data': planning_data_dict,
+                    'error_report': error_report,
+                    'attempt': attempt
+                }
 
                 # Use the specific model type for this artifact
-                result = agent.run_sync(prompt, output_type=model_class)
+                # Pass tool_info and planning_data as deps so they're automatically available to tools
+                result = agent.run_sync(
+                    prompt,
+                    output_type=model_class,
+                    deps=deps_context
+                )
                 artifact_model = result.output
 
                 # Track token usage if in dev mode
@@ -502,15 +521,17 @@ Generate a complete, valid manifest file in key=value format."""
                         extra_validation_args.extend(['--module', module_name])
                         self.logger.print_status(f"Using module name for gpunit validation: {module_name}")
                     
-                    # Extract parameter names from planning data
+                    # Extract ONLY REQUIRED parameter names from planning data
+                    # Optional parameters don't need to be in every GPUnit test
                     parameters = planning_data_dict.get('parameters', [])
                     if parameters:
-                        param_names = [p.get('name', '') for p in parameters if p.get('name')]
-                        if param_names:
+                        # Filter to only required parameters
+                        required_param_names = [p.get('name', '') for p in parameters if p.get('name') and p.get('required', False)]
+                        if required_param_names:
                             extra_validation_args.append('--parameters')
-                            extra_validation_args.extend(param_names)
-                            self.logger.print_status(f"Using {len(param_names)} parameters for gpunit validation")
-                    
+                            extra_validation_args.extend(required_param_names)
+                            self.logger.print_status(f"Using {len(required_param_names)} required parameters for gpunit validation")
+
                     # Only set extra_validation_args if we have something to pass
                     if not extra_validation_args:
                         extra_validation_args = None
