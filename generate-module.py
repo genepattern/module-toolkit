@@ -689,6 +689,54 @@ Make sure the generated artifact follows all guidelines, key requirements and cr
         
         return all_artifacts_successful
     
+    def docker_push(self, planning_data: ModulePlan) -> bool:
+        """Push the built Docker image to Docker Hub.
+
+        Args:
+            planning_data: The ModulePlan containing the docker_image_tag
+
+        Returns:
+            True if the push succeeded, False otherwise
+        """
+        self.logger.print_section("Docker Push")
+
+        planning_dict = planning_data.model_dump() if planning_data else {}
+        tag = planning_dict.get('docker_image_tag', '')
+
+        if not tag:
+            self.logger.print_status("No docker_image_tag found in planning data, cannot push", "ERROR")
+            return False
+
+        self.logger.print_status(f"Pushing Docker image: {tag}")
+
+        import subprocess
+        cmd = ["docker", "push", tag]
+        try:
+            proc = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+            )
+            # Stream output line-by-line so the user can see progress
+            for line in proc.stdout:
+                print(line, end="")
+            proc.wait()
+
+            if proc.returncode == 0:
+                self.logger.print_status(f"✅ Successfully pushed {tag}", "SUCCESS")
+                return True
+            else:
+                self.logger.print_status(f"❌ Docker push failed for {tag} (exit code {proc.returncode})", "ERROR")
+                return False
+        except FileNotFoundError:
+            self.logger.print_status("Docker CLI not found; ensure Docker is installed and on PATH", "ERROR")
+            return False
+        except Exception as e:
+            self.logger.print_status(f"Docker push error: {str(e)}", "ERROR")
+            self.logger.print_status(f"Traceback: {traceback.format_exc()}", "DEBUG")
+            return False
+
     def zip_artifacts(self, module_path: Path, tool_name: str, zip_only: bool = False) -> bool:
         """
         Zip all artifact files into {module_name}.zip at the top level
@@ -834,7 +882,7 @@ Make sure the generated artifact follows all guidelines, key requirements and cr
                 for error in status.error_messages:
                     print(f"  - {error}")
 
-    def run(self, tool_info: Dict[str, str] = None, skip_artifacts: List[str] = None, dev_mode: bool = False, resume_status: ModuleGenerationStatus = None, max_loops: int = MAX_ARTIFACT_LOOPS, no_zip: bool = False, zip_only: bool = False) -> int:
+    def run(self, tool_info: Dict[str, str] = None, skip_artifacts: List[str] = None, dev_mode: bool = False, resume_status: ModuleGenerationStatus = None, max_loops: int = MAX_ARTIFACT_LOOPS, no_zip: bool = False, zip_only: bool = False, docker_push: bool = False) -> int:
         """Run the complete module generation process"""
 
         # Handle resume mode
@@ -939,6 +987,10 @@ Make sure the generated artifact follows all guidelines, key requirements and cr
         if artifacts_success and not no_zip:
             self.zip_artifacts(module_path, tool_info['name'], zip_only)
 
+        # Phase 5: Docker push (if enabled)
+        if artifacts_success and docker_push:
+            self.docker_push(status.planning_data)
+
         # Final report
         self.print_final_report(status, dev_mode)
 
@@ -1042,6 +1094,9 @@ class GenerationScript:
         parser.add_argument('--no-zip', action='store_true', help='Skip creating a zip archive of artifact files')
         parser.add_argument('--zip-only', action='store_true', help='After creating zip archive, delete the individual artifact files (keeps only the zip)')
 
+        # Docker push
+        parser.add_argument('--docker-push', action='store_true', help='Push the Docker image to Docker Hub after building')
+
         self.args = parser.parse_args()
 
     def tool_info_from_args(self):
@@ -1100,7 +1155,8 @@ class GenerationScript:
                     resume_status=status,
                     max_loops=self.args.max_loops,
                     no_zip=self.args.no_zip,
-                    zip_only=self.args.zip_only
+                    zip_only=self.args.zip_only,
+                    docker_push=self.args.docker_push
                 )
             else:
                 # Get tool information from args or user input
@@ -1116,7 +1172,8 @@ class GenerationScript:
                     self.args.dev_mode,
                     max_loops=self.args.max_loops,
                     no_zip=self.args.no_zip,
-                    zip_only=self.args.zip_only
+                    zip_only=self.args.zip_only,
+                    docker_push=self.args.docker_push
                 )
 
         except KeyboardInterrupt:
