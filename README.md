@@ -230,13 +230,4 @@ Distributed under the **BSD 3-Clause License**. See [`LICENSE`](LICENSE) for det
 
 If you use the GenePattern Module AI Toolkit in your research, please cite:
 
-```bibtex
-@software{genepattern_module_toolkit_2026,
-  author       = {Tabor, Ted and {Mesirov Lab, UC San Diego}},
-  title        = {{GenePattern Module AI Toolkit}: A multi-agent system
-                  for automated bioinformatics module generation},
-  year         = {2026},
-  publisher    = {GitHub},
-  url          = {https://github.com/genepattern/module-toolkit}
-}
-```
+Reich M, Liefeld T, Gould J, Lerner J, Tamayo P, Mesirov JP. [GenePattern 2.0](http://www.nature.com/ng/journal/v38/n5/full/ng0506-500.html) Nature Genetics 38 no. 5 (2006): pp500-501 [Google Scholar](http://scholar.google.com/citations?user=lREO6vMAAAAJ&hl=en)
