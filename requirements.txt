@@ -17,3 +17,6 @@ pydantic-ai>= 1.0.1,<2.0.0
 
 # Required for environment variable loading
 python-dotenv>=1.0.0,<2.0.0
+
+# Logfire telemetry
+logfire==4.8.0

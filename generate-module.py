@@ -10,7 +10,9 @@ import os
 import sys
 import traceback
 import argparse
+import logfire
 import json
+import socket
 import zipfile
 from pathlib import Path
 from datetime import datetime
@@ -35,6 +37,17 @@ from paramgroups.agent import paramgroups_agent
 from paramgroups.models import ParamgroupsModel
 from documentation.agent import documentation_agent
 from gpunit.agent import gpunit_agent
+
+
+def enable_telemetry(host="localhost", port=4318):
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.settimeout(0.5)
+        return s.connect_ex((host, port)) == 0
+
+# Enable telemetry with Logfire
+if enable_telemetry():
+    logfire.configure(send_to_logfire=False, service_name="module-toolkit")
+    logfire.instrument_pydantic_ai()
 
 
 # Configuration
