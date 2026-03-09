@@ -7,17 +7,20 @@ Uses Pydantic AI to orchestrate research, planning, and artifact generation.
 """
 
 import os
+import re
 import sys
+import shutil
 import traceback
 import argparse
 import logfire
 import json
 import socket
 import zipfile
+import requests
 from pathlib import Path
 from datetime import datetime
-from typing import Dict, List, Tuple, Any
-from dataclasses import dataclass
+from typing import Dict, List, Optional, Tuple, Any
+from dataclasses import dataclass, field
 from pydantic_ai import Agent
 # from pydantic_ai.mcp import MCPServerStdio
 from dotenv import load_dotenv
@@ -39,6 +42,33 @@ from documentation.agent import documentation_agent
 from gpunit.agent import gpunit_agent
 
 
+_VALID_GPUNIT_TYPES = {'text', 'number', 'file'}
+
+
+def _normalize_param_type(raw_type) -> str:
+    """Map any planning-data parameter type to a valid gpunit --types value.
+
+    The gpunit validator only accepts 'text', 'number', or 'file'.
+    GenePattern-specific types like 'choice', 'password', etc. are all
+    functionally text at the test level, so they map to 'text'.
+    """
+    raw = str(raw_type).lower().strip()
+    return raw if raw in _VALID_GPUNIT_TYPES else 'text'
+
+
+def _sanitize_error_line(line: str) -> str:
+    """Strip shell metacharacters and quotes from an error line.
+
+    Prevents extracted error text from being copied verbatim into a generated
+    Dockerfile RUN instruction and breaking the Docker BuildKit parser (e.g.
+    an unmatched double-quote causing 'unexpected end of statement').
+    """
+    line = line.strip()
+    for ch in ('"', "'", '`', '$', '\\'):
+        line = line.replace(ch, '')
+    return line
+
+
 def enable_telemetry(host="localhost", port=4318):
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         s.settimeout(0.5)
@@ -57,6 +87,94 @@ DEFAULT_OUTPUT_DIR = os.getenv('MODULE_OUTPUT_DIR', './generated-modules')
 # Token cost configuration (cost per 1000 tokens)
 INPUT_TOKEN_COST_PER_1000 = float(os.getenv('INPUT_TOKEN_COST_PER_1000', '0.003'))
 OUTPUT_TOKEN_COST_PER_1000 = float(os.getenv('OUTPUT_TOKEN_COST_PER_1000', '0.015'))
+
+
+@dataclass
+class ExampleDataItem:
+    """Represents a single example data file (local path or URL)."""
+    original: str           # Original value as supplied by the user
+    resolved: str           # Resolved value: absolute path for local files, original URL for URLs
+    is_url: bool            # True if this item came from a URL
+    extension: str          # File extension, e.g. '.bam'
+    filename: str           # Basename, e.g. 'sample.bam'
+    local_path: Optional[str] = None  # Absolute local filesystem path; set after download for URLs
+
+    @property
+    def has_local(self) -> bool:
+        """Return True if a local file path is available."""
+        return self.local_path is not None
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            'original': self.original,
+            'resolved': self.resolved,
+            'is_url': self.is_url,
+            'extension': self.extension,
+            'filename': self.filename,
+            'local_path': self.local_path,
+        }
+
+    @classmethod
+    def from_dict(cls, d: Dict[str, Any]) -> 'ExampleDataItem':
+        return cls(
+            original=d['original'],
+            resolved=d['resolved'],
+            is_url=d['is_url'],
+            extension=d['extension'],
+            filename=d['filename'],
+            local_path=d.get('local_path'),
+        )
+
+
+class ExampleDataResolver:
+    """Validates and normalises --data items into ExampleDataItem objects."""
+
+    def __init__(self, logger: 'Logger'):
+        self.logger = logger
+
+    def resolve(self, items: List[str]) -> List[ExampleDataItem]:
+        """Validate and normalise a list of paths/URLs into ExampleDataItem objects."""
+        result = []
+        for item in items:
+            if item.startswith('http://') or item.startswith('https://'):
+                resolved = self._resolve_url(item)
+            else:
+                resolved = self._resolve_local(item)
+            if resolved:
+                result.append(resolved)
+        return result
+
+    def _resolve_url(self, url: str) -> Optional[ExampleDataItem]:
+        filename = url.split('?')[0].rstrip('/').split('/')[-1] or 'data'
+        ext = Path(filename).suffix.lower()
+        try:
+            resp = requests.head(url, timeout=10, allow_redirects=True)
+            if resp.status_code >= 400:
+                self.logger.print_status(
+                    f"URL returned HTTP {resp.status_code}: {url} — continuing without this item",
+                    "WARNING"
+                )
+                return None
+        except Exception as e:
+            self.logger.print_status(
+                f"Could not reach URL {url} ({e}) — continuing without this item",
+                "WARNING"
+            )
+            return None
+        return ExampleDataItem(
+            original=url, resolved=url, is_url=True,
+            extension=ext, filename=filename, local_path=None
+        )
+
+    def _resolve_local(self, path: str) -> Optional[ExampleDataItem]:
+        p = Path(path).resolve()
+        if not p.exists():
+            print(f"Error: Example data file not found: {path}")
+            sys.exit(1)
+        return ExampleDataItem(
+            original=path, resolved=str(p), is_url=False,
+            extension=p.suffix.lower(), filename=p.name, local_path=str(p)
+        )
 
 
 class Logger:
@@ -86,6 +204,7 @@ class ModuleGenerationStatus:
     planning_data: ModulePlan = None
     artifacts_status: Dict[str, Dict[str, Any]] = None
     error_messages: List[str] = None
+    example_data: List[ExampleDataItem] = None
     # Token tracking fields
     input_tokens: int = 0
     output_tokens: int = 0
@@ -94,6 +213,7 @@ class ModuleGenerationStatus:
         if self.artifacts_status is None: self.artifacts_status = {}
         if self.error_messages is None: self.error_messages = []
         if self.research_data is None: self.research_data = {}
+        if self.example_data is None: self.example_data = []
 
     @property
     def research_complete(self) -> bool:
@@ -140,11 +260,12 @@ class ModuleGenerationStatus:
             'input_tokens': self.input_tokens,
             'output_tokens': self.output_tokens,
             'estimated_cost': self.get_estimated_cost(),
+            'example_data': [item.to_dict() for item in (self.example_data or [])],
         }
 
         # Serialize planning_data if present (it's a Pydantic model)
         if self.planning_data:
-            data['planning_data'] = self.planning_data.model_dump()
+            data['planning_data'] = self.planning_data.model_dump(mode='json')
         else:
             data['planning_data'] = {}
 
@@ -224,7 +345,73 @@ class ModuleAgent:
         self.logger.print_status(f"Creating module directory: {module_path}")
         module_path.mkdir(parents=True, exist_ok=True)
         return module_path
-    
+
+    def download_url_data(self, example_data: List[ExampleDataItem], module_path: Path) -> None:
+        """Download URL-based example data items into {module_path}/data/ before planning.
+
+        Sets item.local_path on each downloaded item so all downstream steps can
+        use item.local_path uniformly without checking is_url.
+        """
+        url_items = [item for item in example_data if item.is_url]
+        if not url_items:
+            return
+
+        data_dir = module_path / "data"
+        data_dir.mkdir(exist_ok=True)
+
+        # Track filenames used in this session to handle collisions
+        used_names: set = set()
+
+        for item in url_items:
+            # Resolve filename collisions
+            filename = item.filename
+            if filename in used_names:
+                stem = Path(filename).stem
+                suffix = Path(filename).suffix
+                counter = 1
+                while filename in used_names:
+                    filename = f"{stem}_{counter}{suffix}"
+                    counter += 1
+            used_names.add(filename)
+
+            dest = data_dir / filename
+            self.logger.print_status(f"Downloading {item.original} → {dest}")
+            try:
+                with requests.get(item.original, stream=True, timeout=60) as resp:
+                    resp.raise_for_status()
+                    with open(dest, 'wb') as f:
+                        for chunk in resp.iter_content(chunk_size=65536):
+                            if chunk:
+                                f.write(chunk)
+                item.local_path = str(dest.resolve())
+                self.logger.print_status(f"Downloaded {filename} ({dest.stat().st_size:,} bytes)", "SUCCESS")
+            except Exception as e:
+                self.logger.print_status(
+                    f"Failed to download {item.original}: {e} — skipping this item",
+                    "WARNING"
+                )
+                # Clean up partial file if it exists
+                if dest.exists():
+                    try:
+                        dest.unlink()
+                    except Exception:
+                        pass
+                # local_path remains None — downstream steps will skip this item
+
+    def cleanup_data_dir(self, module_path: Path) -> None:
+        """Remove the data/ subdirectory after a successful dockerfile step."""
+        data_dir = module_path / "data"
+        if not data_dir.exists():
+            return
+        try:
+            shutil.rmtree(data_dir)
+            self.logger.print_status(f"Cleaned up data directory: {data_dir}")
+        except Exception as e:
+            self.logger.print_status(
+                f"Could not remove data directory {data_dir}: {e}",
+                "WARNING"
+            )
+
     def save_status(self, status: ModuleGenerationStatus, dev_mode: bool = False):
         """Save the status to disk as status.json if in dev mode"""
         if not dev_mode:
@@ -262,7 +449,8 @@ class ModuleAgent:
                 artifacts_status=data.get('artifacts_status', {}),
                 error_messages=data.get('error_messages', []),
                 input_tokens=data.get('input_tokens', 0),
-                output_tokens=data.get('output_tokens', 0)
+                output_tokens=data.get('output_tokens', 0),
+                example_data=[ExampleDataItem.from_dict(d) for d in data.get('example_data', [])],
             )
 
             self.logger.print_status(f"Loaded status from {status_path}")
@@ -281,6 +469,19 @@ class ModuleAgent:
             if tool_info.get('instructions'):
                 instructions_section = f"\n            Additional Instructions:\n            {tool_info['instructions']}\n"
 
+            example_data_section = ""
+            example_data = tool_info.get('example_data') or []
+            if example_data:
+                lines = ["", "            Example Data Provided (for reference only):"]
+                for item in example_data:
+                    kind = "URL" if item.is_url else "local file"
+                    lines.append(f"            - {item.filename} ({item.extension}) — {kind}")
+                lines.append("            These are examples of data the user already has. Use them to understand typical")
+                lines.append("            input formats, but do NOT restrict your research to only these formats. Document")
+                lines.append("            ALL formats the tool supports so the module remains broadly useful.")
+                lines.append("")
+                example_data_section = "\n".join(lines)
+
             prompt = f"""
             Research the bioinformatics tool '{tool_info['name']}' and provide comprehensive information.
             
@@ -290,7 +491,7 @@ class ModuleAgent:
             - Language: {tool_info['language']}
             - Description: {tool_info.get('description', 'Not provided')}
             - Repository: {tool_info.get('repository_url', 'Not provided')}
-            - Documentation: {tool_info.get('documentation_url', 'Not provided')}{instructions_section}
+            - Documentation: {tool_info.get('documentation_url', 'Not provided')}{instructions_section}{example_data_section}
             
             Please provide detailed research including:
             1. Tool purpose and scientific applications
@@ -329,6 +530,20 @@ class ModuleAgent:
             if tool_info.get('instructions'):
                 instructions_section = f"\n            Additional Instructions (IMPORTANT - Pay close attention to these):\n            {tool_info['instructions']}\n"
 
+            example_data_section = ""
+            example_data = tool_info.get('example_data') or []
+            if example_data:
+                lines = ["", "            Example Data Provided (for reference only):"]
+                for item in example_data:
+                    kind = "URL" if item.is_url else "local file"
+                    lines.append(f"            - {item.filename} ({item.extension}) — {kind}")
+                lines.append("            The user has this format available, so the module MUST accept it. However, do")
+                lines.append("            NOT restrict the file_formats field to only this extension — include every")
+                lines.append("            format the tool legitimately supports. The example data tells you what to")
+                lines.append("            include, not what to exclude.")
+                lines.append("")
+                example_data_section = "\n".join(lines)
+
             prompt = f"""
             Create a comprehensive structured plan for the GenePattern module for '{tool_info['name']}'.
             
@@ -336,7 +551,7 @@ class ModuleAgent:
             - Name: {tool_info['name']}
             - Version: {tool_info['version']}
             - Language: {tool_info['language']}
-            - Description: {tool_info.get('description', 'Not provided')}{instructions_section}
+            - Description: {tool_info.get('description', 'Not provided')}{instructions_section}{example_data_section}
             
             Research Results:
             {research_data.get('research', 'No research data available')}
@@ -380,7 +595,7 @@ class ModuleAgent:
         # Special handling for wrapper: determine extension based on tool language
         if artifact_name == 'wrapper':
             # First, check if planning_data has a wrapper_script specified
-            planning_dict = planning_data.model_dump() if planning_data else {}
+            planning_dict = planning_data.model_dump(mode='json') if planning_data else {}
             wrapper_script_from_plan = planning_dict.get('wrapper_script')
 
             if wrapper_script_from_plan:
@@ -424,14 +639,29 @@ class ModuleAgent:
                 self.save_status(status, dev_mode)
 
                 # Convert ModulePlan to a serializable format for the prompt
-                planning_data_dict = planning_data.model_dump()
+                planning_data_dict = planning_data.model_dump(mode='json')
 
                 # Call the agent with appropriate prompt based on artifact type
+                # Build example-data context snippets (used by several artifact types)
+                example_data: List[ExampleDataItem] = status.example_data or []
+
                 if artifact_name == 'manifest':
                     # Build instructions section if provided
                     instructions_section = ""
                     if tool_info.get('instructions'):
                         instructions_section = f"\n\nAdditional Instructions (IMPORTANT):\n{tool_info['instructions']}\n"
+
+                    # Build example data cross-check block
+                    example_data_section = ""
+                    if example_data:
+                        lines = ["\nExample Data Provided (for cross-check only):"]
+                        for item in example_data:
+                            kind = "URL" if item.is_url else "local file"
+                            lines.append(f"- {item.filename} ({item.extension}) — {kind}")
+                        lines.append("Confirm that the fileFormat field on the relevant input parameter(s) includes")
+                        lines.append("this extension. Do NOT replace the full format list with only this extension —")
+                        lines.append("all formats the tool legitimately supports must remain present.")
+                        example_data_section = "\n".join(lines)
 
                     # For manifest, use a direct prompt that doesn't mention tool names
                     prompt = f"""Generate a complete GenePattern module manifest for {tool_info['name']}.
@@ -449,8 +679,160 @@ Planning Data:
 {"Previous attempt failed with error: " + error_report if error_report else ""}
 
 This is attempt {attempt} of {max_loops}.
-
+{example_data_section}
 Generate a complete, valid manifest file in key=value format."""
+
+                elif artifact_name == 'gpunit':
+                    # Build instructions section if provided
+                    instructions_section = ""
+                    if tool_info.get('instructions'):
+                        instructions_section = f"\n\nIMPORTANT - Additional Instructions:\n{tool_info['instructions']}\n"
+
+                    # Build concrete file values block
+                    example_data_section = ""
+                    if example_data:
+                        local_items = [item for item in example_data if item.has_local]
+                        if local_items:
+                            lines = ["\nExample Data for Test Parameters:"]
+                            for item in local_items:
+                                lines.append(f"- {item.local_path}  (use as the value for the matching file input parameter)")
+                            lines.append("Use these exact local paths as parameter values in the test YAML.")
+                            lines.append("For all other parameters (numeric, text, choice), use sensible default or")
+                            lines.append("representative values. Do not invent placeholder strings like '<path_to_input>'.")
+                            example_data_section = "\n".join(lines)
+
+                    prompt = f"""Generate the {artifact_name} artifact for the GenePattern module '{tool_info['name']}'.
+
+{"Previous attempt failed with error: " + error_report if error_report else ""}
+
+This is attempt {attempt} of {max_loops}.{instructions_section}{example_data_section}
+
+Call the {create_method} tool with the following parameters:
+- tool_info: Use the tool information provided
+- planning_data: Use the planning data provided
+- error_report: {repr(error_report)}
+- attempt: {attempt}.
+Make sure the generated artifact follows all guidelines, key requirements and critical rules and edit what the tool gave you as needed."""
+
+                elif artifact_name == 'paramgroups':
+                    # Build instructions section if provided
+                    instructions_section = ""
+                    if tool_info.get('instructions'):
+                        instructions_section = f"\n\nIMPORTANT - Additional Instructions:\n{tool_info['instructions']}\n"
+
+                    # Build grouping hint when two or more distinct extensions are provided
+                    example_data_section = ""
+                    distinct_exts = list(dict.fromkeys(
+                        item.extension for item in example_data if item.extension
+                    ))
+                    if len(distinct_exts) >= 2:
+                        lines = ["\nExample Data Provided:"]
+                        for item in example_data:
+                            kind = "URL" if item.is_url else "local file"
+                            lines.append(f"- {item.filename} ({item.extension}) — {kind}")
+                        lines.append("These files represent distinct input roles. When grouping parameters, keep")
+                        lines.append("parameters that correspond to related input files in the same logical group")
+                        lines.append("(e.g., place a counts matrix and metadata file parameters together in an")
+                        lines.append("'Input Files' group rather than splitting them across unrelated groups).")
+                        example_data_section = "\n".join(lines)
+
+                    prompt = f"""Generate the {artifact_name} artifact for the GenePattern module '{tool_info['name']}'.
+
+{"Previous attempt failed with error: " + error_report if error_report else ""}
+
+This is attempt {attempt} of {max_loops}.{instructions_section}{example_data_section}
+
+Call the {create_method} tool with the following parameters:
+- tool_info: Use the tool information provided
+- planning_data: Use the planning data provided
+- error_report: {repr(error_report)}
+- attempt: {attempt}.
+Make sure the generated artifact follows all guidelines, key requirements and critical rules and edit what the tool gave you as needed."""
+
+                elif artifact_name == 'dockerfile':
+                    # Build instructions section if provided
+                    instructions_section = ""
+                    if tool_info.get('instructions'):
+                        instructions_section = f"\n\nIMPORTANT - Additional Instructions:\n{tool_info['instructions']}\n"
+
+                    # Build bind-mount runtime note
+                    example_data_section = ""
+                    local_items = [item for item in example_data if item.has_local]
+                    if local_items:
+                        lines = ["\nExample Data for Runtime Validation:"]
+                        for item in local_items:
+                            lines.append(f"- {item.local_path} (will be bind-mounted into the container as /data/{item.filename})")
+                        lines.append("After the image is built, a runtime command will be run using this file")
+                        lines.append("bind-mounted into the container — no network access or download utilities")
+                        lines.append("(wget, curl) are needed inside the image for this test. Ensure all dependencies")
+                        lines.append("needed to process this file type are installed. Do NOT assume the module only")
+                        lines.append("handles this format — install support for all formats the tool accepts.")
+                        example_data_section = "\n".join(lines)
+
+                    # Fix 1 & 3: Extract specific actionable error lines from the full
+                    # build log so the LLM sees them clearly rather than having to find
+                    # them buried in hundreds of lines of Docker output.
+                    structured_errors_section = ""
+                    if error_report:
+                        error_indicators = [
+                            'E: Unable to locate package',
+                            'E: Package',
+                            'ERROR:',
+                            'error:',
+                            'No such file or directory',
+                            'ModuleNotFoundError',
+                            'ImportError',
+                            'command not found',
+                            'exit code:',
+                            'executor failed',
+                            'FAILED',
+                            'the following arguments are required:',
+                            'usage:',
+                            'unexpected end of statement',
+                            'failed to process',
+                        ]
+                        extracted = []
+                        for line in error_report.splitlines():
+                            if any(ind in line for ind in error_indicators):
+                                sanitized = _sanitize_error_line(line)
+                                if sanitized and sanitized not in extracted:
+                                    extracted.append(sanitized)
+                        if extracted:
+                            structured_errors_section = "\n\nKEY ERRORS FROM PREVIOUS ATTEMPT (fix these specifically):\n"
+                            structured_errors_section += "\n".join(f"  - {e}" for e in extracted)
+                            structured_errors_section += (
+                                "\n\nBefore writing apt-get install commands, use the verify_apt_packages tool "
+                                "to confirm every package name is valid. If a package is not found, search for "
+                                "the correct name before using it."
+                            )
+                            if any('the following arguments are required' in e or 'usage:' in e for e in extracted):
+                                structured_errors_section += (
+                                    "\n\nThe runtime test command failed because arguments were passed in the wrong style. "
+                                    "The wrapper uses named --flag style arguments (e.g. --input-file, --command). "
+                                    "Check the usage: line in the error above for the exact flag names required."
+                                )
+                            if any('unexpected end of statement' in e or 'failed to process' in e for e in extracted):
+                                structured_errors_section += (
+                                    "\n\nDOCKERFILE SYNTAX ERROR: A RUN instruction contains an unmatched quote or "
+                                    "shell metacharacter. Do NOT use double-quoted strings in RUN echo or comment "
+                                    "lines. Use single quotes or no quotes. Check every RUN instruction for "
+                                    "unbalanced double-quotes."
+                                )
+
+                    prompt = f"""Generate the {artifact_name} artifact for the GenePattern module '{tool_info['name']}'.
+
+{"Previous attempt failed. Full error report:" + chr(10) + error_report if error_report else ""}
+{structured_errors_section}
+
+This is attempt {attempt} of {max_loops}.{instructions_section}{example_data_section}
+
+Call the {create_method} tool with the following parameters:
+- tool_info: Use the tool information provided
+- planning_data: Use the planning data provided
+- error_report: {repr(error_report)}
+- attempt: {attempt}.
+Make sure the generated artifact follows all guidelines, key requirements and critical rules and edit what the tool gave you as needed."""
+
                 else:
                     # Build instructions section if provided
                     instructions_section = ""
@@ -523,9 +905,38 @@ Make sure the generated artifact follows all guidelines, key requirements and cr
                 if artifact_name == 'dockerfile':
                     # Pass the docker image tag from planning data to the dockerfile linter
                     docker_tag = planning_data_dict.get('docker_image_tag', '')
+                    extra_validation_args = []
                     if docker_tag:
-                        extra_validation_args = ['-t', docker_tag]
+                        extra_validation_args.extend(['-t', docker_tag])
                         self.logger.print_status(f"Using docker tag for build: {docker_tag}")
+
+                    # Build runtime command from example data (Step 7)
+                    # gpunit runs before dockerfile (insertion-order guarantee), so test.yml is readable
+                    if example_data:
+                        gpunit_params: Dict[str, Any] = {}
+                        test_yml_path = module_path / "test.yml"
+                        if test_yml_path.exists():
+                            try:
+                                import yaml
+                                with open(test_yml_path) as yf:
+                                    gpunit_doc = yaml.safe_load(yf)
+                                if isinstance(gpunit_doc, dict):
+                                    gpunit_params = gpunit_doc.get('params', {}) or {}
+                            except Exception as e:
+                                self.logger.print_status(f"Could not parse test.yml for runtime params: {e}", "WARNING")
+
+                        runtime_cmd, volumes = self.build_runtime_command(
+                            planning_data, example_data, gpunit_params, module_path
+                        )
+                        if runtime_cmd:
+                            extra_validation_args.extend(['-c', runtime_cmd])
+                            self.logger.print_status(f"Runtime command for dockerfile test: {runtime_cmd}")
+                        for vol in volumes:
+                            extra_validation_args.extend(['-v', vol])
+                            self.logger.print_status(f"Volume mount: {vol}")
+
+                    if not extra_validation_args:
+                        extra_validation_args = None
                 elif artifact_name == 'gpunit':
                     # Pass the module name and parameters to the gpunit linter for validation
                     extra_validation_args = []
@@ -533,17 +944,26 @@ Make sure the generated artifact follows all guidelines, key requirements and cr
                     if module_name:
                         extra_validation_args.extend(['--module', module_name])
                         self.logger.print_status(f"Using module name for gpunit validation: {module_name}")
-                    
-                    # Extract ONLY REQUIRED parameter names from planning data
-                    # Optional parameters don't need to be in every GPUnit test
+
+                    # Extract ONLY REQUIRED parameter names (and their types) from planning data.
+                    # Optional parameters don't need to be in every GPUnit test.
                     parameters = planning_data_dict.get('parameters', [])
                     if parameters:
-                        # Filter to only required parameters
-                        required_param_names = [p.get('name', '') for p in parameters if p.get('name') and p.get('required', False)]
-                        if required_param_names:
+                        required_params = [
+                            p for p in parameters
+                            if p.get('name') and p.get('required', False)
+                        ]
+                        if required_params:
+                            required_param_names = [p['name'] for p in required_params]
                             extra_validation_args.append('--parameters')
                             extra_validation_args.extend(required_param_names)
                             self.logger.print_status(f"Using {len(required_param_names)} required parameters for gpunit validation")
+
+                            # Wire --types co-ordered with --parameters so the gpunit linter
+                            # can verify file-typed parameters reference existing files.
+                            param_types = [_normalize_param_type(p.get('type', 'text')) for p in required_params]
+                            extra_validation_args.append('--types')
+                            extra_validation_args.extend(param_types)
 
                     # Only set extra_validation_args if we have something to pass
                     if not extra_validation_args:
@@ -583,6 +1003,270 @@ Make sure the generated artifact follows all guidelines, key requirements and cr
                     return False
 
         return False
+
+    def build_runtime_command(
+        self,
+        planning_data: ModulePlan,
+        example_data: List[ExampleDataItem],
+        gpunit_params: Dict[str, Any],
+        module_path: Path = None,
+    ) -> Tuple[Optional[str], List[str]]:
+        """Build a docker runtime command and volume list for Dockerfile runtime testing.
+
+        Tries two strategies in order:
+        1. Wrapper introspection: reads the generated wrapper script and parses its
+           argparse flags so the command uses --flag value style arguments.
+        2. Placeholder substitution: falls back to substituting <param.name> tokens
+           in planning_data.command_line (original behaviour).
+
+        Returns:
+            (command_str, volume_list) where volume_list entries are "host_path:container_path".
+            Returns (None, []) when no substitution is possible.
+        """
+        from agents.models import ParameterType
+
+        parameters = {p.name: p for p in planning_data.parameters}
+
+        # Build extension → item mapping for file matching (first match wins)
+        ext_to_item: Dict[str, ExampleDataItem] = {}
+        positional_files: List[ExampleDataItem] = []
+        for item in (example_data or []):
+            if item.has_local:
+                if item.extension and item.extension not in ext_to_item:
+                    ext_to_item[item.extension] = item
+                positional_files.append(item)
+
+        volume_list: List[str] = []
+
+        # ------------------------------------------------------------------ #
+        # Strategy 1: introspect the wrapper script for argparse flag names  #
+        # ------------------------------------------------------------------ #
+        wrapper_flags = None  # dict: param_name -> '--flag-name' or None (positional)
+        if module_path is not None:
+            wrapper_script = planning_data.wrapper_script or 'wrapper.py'
+            wrapper_path = module_path / wrapper_script
+            if wrapper_path.exists():
+                try:
+                    wrapper_flags = self._parse_wrapper_flags(wrapper_path)
+                    self.logger.print_status(
+                        f"Introspected {len(wrapper_flags)} argument(s) from {wrapper_script}"
+                    )
+                except Exception as e:
+                    self.logger.print_status(
+                        f"Could not introspect wrapper flags, falling back to placeholder substitution: {e}",
+                        "WARNING"
+                    )
+
+        if wrapper_flags is not None:
+            # Build command using --flag value style derived from wrapper source
+            wrapper_script = planning_data.wrapper_script or 'wrapper.py'
+            # Determine interpreter prefix
+            if wrapper_script.endswith('.py'):
+                prefix = f"python {wrapper_script}"
+            elif wrapper_script.endswith(('.R', '.r')):
+                prefix = f"Rscript {wrapper_script}"
+            elif wrapper_script.endswith('.sh'):
+                prefix = f"bash {wrapper_script}"
+            else:
+                prefix = wrapper_script
+
+            parts = [prefix]
+            positional_file_idx = 0
+
+            for param in planning_data.parameters:
+                flag = wrapper_flags.get(param.name)
+                # Skip parameters that have no corresponding flag and aren't positional
+                if flag is None and param.name not in wrapper_flags:
+                    continue
+
+                if param.type == ParameterType.FILE:
+                    item = None
+                    if param.file_formats:
+                        for fmt in param.file_formats:
+                            ext = fmt if fmt.startswith('.') else f'.{fmt}'
+                            if ext.lower() in ext_to_item:
+                                item = ext_to_item[ext.lower()]
+                                break
+                    if item is None and positional_file_idx < len(positional_files):
+                        item = positional_files[positional_file_idx]
+                        positional_file_idx += 1
+
+                    if item is None or not item.has_local:
+                        self.logger.print_status(
+                            f"No local example data for FILE parameter '{param.name}' — skipping runtime command",
+                            "WARNING"
+                        )
+                        return None, []
+
+                    container_path = f"/data/{item.filename}"
+                    volume_entry = f"{item.local_path}:{container_path}"
+                    if volume_entry not in volume_list:
+                        volume_list.append(volume_entry)
+
+                    if flag:
+                        parts.append(f"{flag} {container_path}")
+                    else:
+                        parts.append(container_path)
+
+                elif not param.required and param.type not in (ParameterType.INTEGER, ParameterType.FLOAT):
+                    # Skip optional non-numeric parameters to keep the command minimal
+                    continue
+
+                else:
+                    value = gpunit_params.get(param.name)
+                    if value is None:
+                        value = param.default_value
+                    if value is None:
+                        if param.type == ParameterType.INTEGER:
+                            value = "1"
+                        elif param.type == ParameterType.FLOAT:
+                            value = "1.0"
+                        elif param.type == ParameterType.CHOICE and param.choices:
+                            value = param.choices[0].value
+                        else:
+                            value = "output"
+
+                    if flag:
+                        parts.append(f"{flag} {value}")
+                    else:
+                        parts.append(str(value))
+
+            return " ".join(parts), volume_list
+
+        # ------------------------------------------------------------------ #
+        # Strategy 2: placeholder substitution in command_line (fallback)    #
+        # ------------------------------------------------------------------ #
+        command_line = planning_data.command_line
+        placeholders = re.findall(r'<([^>]+)>', command_line)
+
+        if not placeholders:
+            return None, []
+
+        result_cmd = command_line
+        positional_file_idx = 0
+
+        for placeholder in placeholders:
+            param = parameters.get(placeholder)
+            if param is None:
+                continue
+
+            if param.type == ParameterType.FILE:
+                item = None
+                if param.file_formats:
+                    for fmt in param.file_formats:
+                        ext = fmt if fmt.startswith('.') else f'.{fmt}'
+                        if ext.lower() in ext_to_item:
+                            item = ext_to_item[ext.lower()]
+                            break
+                if item is None and positional_file_idx < len(positional_files):
+                    item = positional_files[positional_file_idx]
+                    positional_file_idx += 1
+
+                if item is None or not item.has_local:
+                    self.logger.print_status(
+                        f"No local example data available for FILE parameter '{placeholder}' — skipping runtime command",
+                        "WARNING"
+                    )
+                    return None, []
+
+                container_path = f"/data/{item.filename}"
+                volume_entry = f"{item.local_path}:{container_path}"
+                if volume_entry not in volume_list:
+                    volume_list.append(volume_entry)
+                result_cmd = result_cmd.replace(f'<{placeholder}>', container_path, 1)
+
+            else:
+                value = gpunit_params.get(placeholder)
+                if value is None:
+                    value = param.default_value
+                if value is None:
+                    if param.type == ParameterType.INTEGER:
+                        value = "1"
+                    elif param.type == ParameterType.FLOAT:
+                        value = "1.0"
+                    elif param.type == ParameterType.CHOICE and param.choices:
+                        value = param.choices[0].value
+                    else:
+                        value = "output"
+                result_cmd = result_cmd.replace(f'<{placeholder}>', str(value), 1)
+
+        return result_cmd, volume_list
+
+    def _parse_wrapper_flags(self, wrapper_path: Path) -> Dict[str, Optional[str]]:
+        """Parse a wrapper script's argparse add_argument calls to extract flag names.
+
+        Reads the wrapper source and finds lines like:
+            parser.add_argument('--input-file', ...)
+            parser.add_argument('input_file', ...)   # positional
+
+        Returns a dict mapping GenePattern parameter name (dashes→underscores stripped
+        to canonical form) to the flag string (e.g. '--input-file') or None for positional.
+        Only includes arguments that have a long-form flag or are positional.
+        """
+        import ast
+
+        source = wrapper_path.read_text(encoding='utf-8')
+        flags: Dict[str, Optional[str]] = {}
+
+        try:
+            tree = ast.parse(source)
+        except SyntaxError:
+            # Fall back to regex if AST parse fails
+            return self._parse_wrapper_flags_regex(source)
+
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            # Match parser.add_argument(...) calls
+            func = node.func
+            is_add_argument = (
+                (isinstance(func, ast.Attribute) and func.attr == 'add_argument') or
+                (isinstance(func, ast.Name) and func.id == 'add_argument')
+            )
+            if not is_add_argument:
+                continue
+            if not node.args:
+                continue
+
+            # Collect string args (flag names like '--input-file' or 'input_file')
+            str_args = [
+                a.value if isinstance(a, ast.Constant) and isinstance(a.value, str)
+                else None
+                for a in node.args
+            ]
+            str_args = [s for s in str_args if s is not None]
+
+            # Find the long flag (prefer --xxx over -x)
+            long_flag = next((s for s in str_args if s.startswith('--')), None)
+            positional = next((s for s in str_args if not s.startswith('-')), None)
+
+            if long_flag:
+                # Canonical name: '--input-file' → 'input.file' and 'input_file'
+                canon = long_flag.lstrip('-').replace('-', '.').replace('_', '.')
+                flags[canon] = long_flag
+                # Also store with underscore/hyphen variants for looser matching
+                flags[long_flag.lstrip('-').replace('-', '_')] = long_flag
+                flags[long_flag.lstrip('-').replace('-', '.')] = long_flag
+            elif positional:
+                canon = positional.replace('-', '.').replace('_', '.')
+                flags[canon] = None  # positional — no flag prefix
+                flags[positional.replace('-', '_')] = None
+                flags[positional.replace('-', '.')] = None
+
+        return flags
+
+    def _parse_wrapper_flags_regex(self, source: str) -> Dict[str, Optional[str]]:
+        """Regex fallback for _parse_wrapper_flags when AST parsing fails."""
+        flags: Dict[str, Optional[str]] = {}
+        pattern = re.compile(r"""add_argument\s*\(\s*(['"])(--?[\w-]+)\1""")
+        for match in pattern.finditer(source):
+            flag = match.group(2)
+            if flag.startswith('--'):
+                canon = flag.lstrip('-').replace('-', '.')
+                flags[canon] = flag
+                flags[flag.lstrip('-').replace('-', '_')] = flag
+        return flags
+
 
     def validate_artifact(self, file_path: str, validate_tool: str, extra_args: List[str] = None) -> Dict[str, Any]:
         """Validate an artifact using its linter directly
@@ -687,7 +1371,9 @@ Make sure the generated artifact follows all guidelines, key requirements and cr
         # Initialize skip list and success flag
         if skip_artifacts is None: skip_artifacts = []
         all_artifacts_successful = True
-        
+        # NOTE: artifact_agents dict order is insertion order (Python 3.7+).
+        # gpunit intentionally comes before dockerfile so test.yml is available
+        # when build_runtime_command reads it during the dockerfile step.
         for artifact_name, artifact_config in self.artifact_agents.items():
             if artifact_name in skip_artifacts:  # Check if this artifact should be skipped
                 self.logger.print_status(f"Skipping {artifact_name} (--skip-{artifact_name} specified)")
@@ -713,7 +1399,7 @@ Make sure the generated artifact follows all guidelines, key requirements and cr
         """
         self.logger.print_section("Docker Push")
 
-        planning_dict = planning_data.model_dump() if planning_data else {}
+        planning_dict = planning_data.model_dump(mode='json') if planning_data else {}
         tag = planning_dict.get('docker_image_tag', '')
 
         if not tag:
@@ -895,7 +1581,7 @@ Make sure the generated artifact follows all guidelines, key requirements and cr
                 for error in status.error_messages:
                     print(f"  - {error}")
 
-    def run(self, tool_info: Dict[str, str] = None, skip_artifacts: List[str] = None, dev_mode: bool = False, resume_status: ModuleGenerationStatus = None, max_loops: int = MAX_ARTIFACT_LOOPS, no_zip: bool = False, zip_only: bool = False, docker_push: bool = False) -> int:
+    def run(self, tool_info: Dict[str, str] = None, skip_artifacts: List[str] = None, dev_mode: bool = False, resume_status: ModuleGenerationStatus = None, max_loops: int = MAX_ARTIFACT_LOOPS, no_zip: bool = False, zip_only: bool = False, docker_push: bool = False, example_data: List[ExampleDataItem] = None) -> int:
         """Run the complete module generation process"""
 
         # Handle resume mode
@@ -904,42 +1590,73 @@ Make sure the generated artifact follows all guidelines, key requirements and cr
             status = resume_status
             module_path = Path(status.module_directory)
 
+            # If --data was passed on resume, override the persisted example_data
+            if example_data is not None:
+                status.example_data = example_data
+                self.logger.print_status(f"Overriding example_data with {len(example_data)} item(s) from --data")
+
             # Extract tool_info from status if not provided
             if not tool_info:
                 # Try to extract language from research_data or planning_data
                 language = 'unknown'
                 if status.research_data and isinstance(status.research_data, dict):
-                    # Try to find language info in research data
                     research_text = str(status.research_data.get('research', ''))
-                    # Look for common language indicators
                     if 'bioconductor' in research_text.lower() or ' r package' in research_text.lower() or 'cran' in research_text.lower():
                         language = 'r'
                     elif 'python' in research_text.lower() and 'pypi' in research_text.lower():
                         language = 'python'
-                
-                # Also check planning data if available
+
                 if language == 'unknown' and status.planning_data:
                     plan_text = str(status.planning_data.plan if hasattr(status.planning_data, 'plan') else '')
                     if 'bioconductor' in plan_text.lower() or ' r package' in plan_text.lower():
                         language = 'r'
                     elif 'python' in plan_text.lower():
                         language = 'python'
-                
+
                 tool_info = {
                     'name': status.tool_name,
                     'version': 'latest',
                     'language': language,
                     'description': '',
                     'repository_url': '',
-                    'documentation_url': ''
+                    'documentation_url': '',
+                    'example_data': status.example_data,
                 }
                 self.logger.print_status(f"Detected tool language from existing data: {language}")
+            else:
+                # Ensure tool_info carries the (possibly overridden) example_data
+                tool_info['example_data'] = status.example_data
+
+            # Re-download any URL items whose local_path was not persisted
+            url_items_missing_local = [
+                item for item in (status.example_data or [])
+                if item.is_url and not item.has_local
+            ]
+            if url_items_missing_local:
+                self.logger.print_status(
+                    f"Re-downloading {len(url_items_missing_local)} URL item(s) whose local_path was not recorded"
+                )
+                self.download_url_data(status.example_data, module_path)
+                tool_info['example_data'] = status.example_data
+                self.save_status(status, dev_mode)
+
         else:
             self.logger.print_status(f"Generating module for: {tool_info['name']}")
             # Create module directory
             module_path = self.create_module_directory(tool_info['name'])
             # Initialize status tracking
-            status = ModuleGenerationStatus(tool_name=tool_info['name'], module_directory=str(module_path))
+            status = ModuleGenerationStatus(
+                tool_name=tool_info['name'],
+                module_directory=str(module_path),
+                example_data=example_data or [],
+            )
+            # Propagate example_data into tool_info so prompt builders can read it
+            tool_info['example_data'] = status.example_data
+
+            # Step 1b: Download URL items before research/planning
+            if status.example_data:
+                self.download_url_data(status.example_data, module_path)
+
             self.save_status(status, dev_mode)
 
         # Phase 1: Research
@@ -996,6 +1713,11 @@ Make sure the generated artifact follows all guidelines, key requirements and cr
 
         artifacts_success = self.generate_all_artifacts(tool_info, status.planning_data, module_path, status, skip_artifacts, max_loops, dev_mode)
 
+        # Step 1c: Clean up downloaded data/ directory after successful dockerfile step
+        dockerfile_validated = status.artifacts_status.get('dockerfile', {}).get('validated', False)
+        if dockerfile_validated:
+            self.cleanup_data_dir(module_path)
+
         # Phase 4: Zip artifacts (if successful and not disabled)
         if artifacts_success and not no_zip:
             self.zip_artifacts(module_path, tool_info['name'], zip_only)
@@ -1045,6 +1767,15 @@ class GenerationScript:
         tool_info['repository_url'] = input("Repository URL (optional): ").strip()
         tool_info['documentation_url'] = input("Documentation URL (optional): ").strip()
         tool_info['instructions'] = input("Additional instructions/context (optional): ").strip()
+
+        # Example data (optional)
+        data_input = input("Example data files or URLs (space-separated, optional): ").strip()
+        if data_input:
+            raw_items = data_input.split()
+            resolver = ExampleDataResolver(self.logger)
+            tool_info['example_data'] = resolver.resolve(raw_items)
+        else:
+            tool_info['example_data'] = []
 
         return tool_info
 
@@ -1110,6 +1841,12 @@ class GenerationScript:
         # Docker push
         parser.add_argument('--docker-push', action='store_true', help='Push the Docker image to Docker Hub after building')
 
+        # Example data
+        parser.add_argument('--data', nargs='+', metavar='PATH_OR_URL',
+                            help='Example data files (local paths or HTTP/HTTPS URLs). URLs are downloaded '
+                                 'before planning so their contents can inform the LLM. Local files are '
+                                 'used directly. All files are bind-mounted during the Dockerfile runtime test.')
+
         self.args = parser.parse_args()
 
     def tool_info_from_args(self):
@@ -1121,8 +1858,13 @@ class GenerationScript:
             'description': self.args.description or "",
             'repository_url': self.args.repository_url or "",
             'documentation_url': self.args.documentation_url or "",
-            'instructions': self.args.instructions or ""
+            'instructions': self.args.instructions or "",
+            'example_data': [],
         }
+        # Resolve --data items if provided
+        if self.args.data:
+            resolver = ExampleDataResolver(self.logger)
+            self.tool_info['example_data'] = resolver.resolve(self.args.data)
 
     def parse_skip_artifacts(self):
         """Determine which artifacts to skip based on command line arguments"""
@@ -1162,6 +1904,14 @@ class GenerationScript:
             if self.args.resume:
                 self.logger.print_status(f"Resuming from previous run in directory: {self.args.resume}")
                 status = self.module_agent.load_status(self.args.resume)
+
+                # Resolve fresh --data override if provided on resume
+                resume_example_data = None
+                if self.args.data:
+                    resolver = ExampleDataResolver(self.logger)
+                    resume_example_data = resolver.resolve(self.args.data)
+                    self.logger.print_status(f"--data override: {len(resume_example_data)} item(s) will replace persisted example_data")
+
                 return self.module_agent.run(
                     skip_artifacts=self.skip_artifacts,
                     dev_mode=self.args.dev_mode,
@@ -1169,7 +1919,8 @@ class GenerationScript:
                     max_loops=self.args.max_loops,
                     no_zip=self.args.no_zip,
                     zip_only=self.args.zip_only,
-                    docker_push=self.args.docker_push
+                    docker_push=self.args.docker_push,
+                    example_data=resume_example_data,
                 )
             else:
                 # Get tool information from args or user input
@@ -1177,6 +1928,8 @@ class GenerationScript:
                     self.tool_info_from_args()
                 else:
                     self.tool_info = self.get_user_input()
+
+                example_data = self.tool_info.pop('example_data', []) or []
 
                 # Run the generation process
                 return self.module_agent.run(
@@ -1186,7 +1939,8 @@ class GenerationScript:
                     max_loops=self.args.max_loops,
                     no_zip=self.args.no_zip,
                     zip_only=self.args.zip_only,
-                    docker_push=self.args.docker_push
+                    docker_push=self.args.docker_push,
+                    example_data=example_data,
                 )
 
         except KeyboardInterrupt:

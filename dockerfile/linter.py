@@ -271,6 +271,14 @@ Examples:
         default=False,
         help="Clean up built images after testing (default: true)"
     )
+    p.add_argument(
+        "-v", "--volume",
+        action="append",
+        dest="volumes",
+        default=[],
+        metavar="HOST:CONTAINER",
+        help="Bind-mount passed to 'docker run' during runtime testing (repeatable, e.g. /data/sample.bam:/data/sample.bam)"
+    )
     return p.parse_args(argv)
 
 
@@ -296,9 +304,10 @@ def main(argv: list[str]) -> int:
     
     # Prepare test context - pass all CLI arguments to tests
     test_kwargs = {
-        'tag': args.tag,  # May be None
+        'tag': args.tag,      # May be None
         'command': args.cmd,  # May be None
         'cleanup': args.cleanup,
+        'volumes': args.volumes,  # List of "host:container" strings (may be empty)
     }
     
     # Run modular tests

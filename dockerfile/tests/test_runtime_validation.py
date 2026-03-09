@@ -92,20 +92,31 @@ def run_test(dockerfile_path: str, shared_context: dict) -> List[LintIssue]:
     
     # Get the built image tag
     tag = shared_context.get('built_tag')
-    
+
     if not tag:
+        # Build likely failed — that error is already reported by test_build_validation.
+        # Emit a WARNING here so the build ERROR remains the only actionable failure.
         issues.append(LintIssue(
-            "ERROR",
-            "Cannot test runtime: No Docker tag available",
-            "Build validation must provide a tag for runtime testing"
+            "WARNING",
+            "Skipping runtime test: no Docker tag available (build likely failed)",
+            "Fix the build errors above first"
         ))
         return issues
-    
+
+    # Collect bind-mount volumes from shared_context (host:container strings)
+    volumes = shared_context.get('volumes', [])
+
     # Run command inside a shell for broader command compatibility.
     # We set entrypoint to 'sh' to avoid image CMD/ENTRYPOINT interference.
     # Note: If the image does not include a POSIX shell, this will fail and report accordingly.
+    volume_flags = []
+    for vol in volumes:
+        volume_flags.extend(["-v", vol])
+
     cmd = [
-        "docker", "run", "--rm", "--entrypoint", "sh", tag, "-lc", command,
+        "docker", "run", "--rm",
+        *volume_flags,
+        "--entrypoint", "sh", tag, "-lc", command,
     ]
     
     try:
