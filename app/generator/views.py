@@ -143,19 +143,36 @@ def dashboard(request):
     stats = load_user_stats(username)
     max_runs = get_max_runs_for_user(username)
     
-    # Get list of resumable modules (those with status.json)
+    # Get list of resumable modules (those with status.json) and their example_data
     resumable_modules = []
+    resumable_module_data = {}  # {module_name: [{"original": ..., "is_url": ..., "filename": ...}, ...]}
     for module in modules:
         status_file = Path(module['path']) / 'status.json'
         if status_file.exists():
             resumable_modules.append(module['name'])
-    
+            try:
+                with open(status_file, 'r') as f:
+                    status_data = json.load(f)
+                example_data = status_data.get('example_data', [])
+                resumable_module_data[module['name']] = [
+                    {
+                        'original': item.get('original', ''),
+                        'filename': item.get('filename', ''),
+                        'is_url': item.get('is_url', False),
+                        'local_path': item.get('local_path'),
+                    }
+                    for item in example_data
+                ]
+            except (json.JSONDecodeError, IOError):
+                resumable_module_data[module['name']] = []
+
     context = {
         'username': username,
         'modules': modules,
         'run_count': stats.get('run_count', 0),
         'max_runs': max_runs,
         'resumable_modules': resumable_modules,
+        'resumable_module_data_json': json.dumps(resumable_module_data),
     }
     
     return render(request, 'generator/dashboard.html', context)
@@ -244,11 +261,21 @@ def run_generate_script(username, form_data, module_toolkit_path, output_dir, mo
     # Dev mode
     if form_data.get('dev_mode') == 'on':
         cmd.append('--dev-mode')
-    
+
+    # Pre-created module directory — ensures uploads and artifacts share the same dir
+    if form_data.get('module_dir'):
+        cmd.extend(['--module-dir', form_data['module_dir']])
+
     # Resume
     if form_data.get('resume'):
         resume_path = output_dir / form_data['resume']
         cmd.extend(['--resume', str(resume_path)])
+
+    # Example data: uploaded file paths and/or URLs
+    data_items = form_data.get('data_items', [])
+    if data_items:
+        cmd.append('--data')
+        cmd.extend(data_items)
 
     # For resume, the actual_module_dir is known from the start
     actual_module_dir = actual_module_name if is_resume else None
@@ -384,7 +411,12 @@ def generate_module(request):
         'dev_mode': request.POST.get('dev_mode', ''),
         'resume': request.POST.get('resume', '').strip(),
     }
-    
+
+    # Collect example data items: uploaded file paths + typed URLs
+    data_file_paths = request.POST.getlist('data_file_path')
+    data_urls = [u.strip() for u in request.POST.getlist('data_url') if u.strip()]
+    form_data['data_items'] = data_file_paths + data_urls
+
     # Validate required fields
     if not form_data['name'] and not form_data['resume']:
         return JsonResponse({'error': 'Tool name is required'}, status=400)
@@ -405,11 +437,16 @@ def generate_module(request):
     # Generate expected module directory name for tracking
     if form_data['resume']:
         expected_module = form_data['resume']
+        form_data['module_dir'] = ''  # resume uses existing dir; no --module-dir needed
     else:
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         tool_name_clean = form_data['name'].lower().replace(' ', '_').replace('-', '_')
         expected_module = f"{tool_name_clean}_{timestamp}"
-    
+        # Pre-create the module directory so uploaded files and artifacts share it
+        module_path = output_dir / expected_module
+        module_path.mkdir(parents=True, exist_ok=True)
+        form_data['module_dir'] = str(module_path)
+
     # Run script in background thread
     thread = threading.Thread(
         target=run_generate_script,
@@ -421,6 +458,58 @@ def generate_module(request):
         'success': True,
         'message': 'Module generation started',
         'module': expected_module,
+    })
+
+
+@login_required
+def upload_data_file(request):
+    """Save an uploaded example-data file into the module's artifact directory.
+
+    Expects a multipart POST with:
+      - ``file``       — the file to upload
+      - ``module_dir`` — the module directory name (not a full path)
+
+    Returns JSON: {"path": "<absolute_path>", "filename": "<name>"}
+    """
+    if request.method != 'POST':
+        return JsonResponse({'error': 'POST required'}, status=405)
+
+    username = request.session.get('username')
+    module_dir_name = request.POST.get('module_dir', '').strip()
+    uploaded_file = request.FILES.get('file')
+
+    if not module_dir_name:
+        return JsonResponse({'error': 'module_dir is required'}, status=400)
+    if not uploaded_file:
+        return JsonResponse({'error': 'No file uploaded'}, status=400)
+
+    # Resolve destination directory; create it if it doesn't exist yet
+    dest_dir = settings.GENERATED_MODULES_DIR / username / module_dir_name
+    dest_dir.mkdir(parents=True, exist_ok=True)
+
+    # Security: strip directory components from the filename
+    safe_name = Path(uploaded_file.name).name
+    dest_path = dest_dir / safe_name
+
+    # Handle filename collisions
+    if dest_path.exists():
+        stem = dest_path.stem
+        suffix = dest_path.suffix
+        counter = 1
+        while dest_path.exists():
+            dest_path = dest_dir / f"{stem}_{counter}{suffix}"
+            counter += 1
+
+    try:
+        with open(dest_path, 'wb') as f:
+            for chunk in uploaded_file.chunks():
+                f.write(chunk)
+    except Exception as e:
+        return JsonResponse({'error': f'Failed to save file: {e}'}, status=500)
+
+    return JsonResponse({
+        'path': str(dest_path.resolve()),
+        'filename': dest_path.name,
     })
 
 

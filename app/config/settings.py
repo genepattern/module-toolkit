@@ -106,3 +106,8 @@ def get_users():
     return dict(zip(users, passwords))
 
 AUTH_USERS = get_users()
+
+# File upload size limits (100 MB)
+DATA_UPLOAD_MAX_MEMORY_SIZE = 100 * 1024 * 1024
+FILE_UPLOAD_MAX_MEMORY_SIZE = 100 * 1024 * 1024
+

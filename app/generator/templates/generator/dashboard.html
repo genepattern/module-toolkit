@@ -80,6 +80,32 @@
             white-space: pre-wrap;
             word-wrap: break-word;
         }
+        .data-item-badge {
+            display: inline-flex;
+            align-items: center;
+            background: #e9ecef;
+            border-radius: 0.375rem;
+            padding: 0.25rem 0.5rem;
+            margin: 0.2rem;
+            font-size: 0.8rem;
+            max-width: 100%;
+        }
+        .data-item-badge .badge-name {
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+            max-width: 300px;
+        }
+        .data-item-badge .remove-btn {
+            cursor: pointer;
+            margin-left: 0.4rem;
+            color: #6c757d;
+            font-weight: bold;
+            line-height: 1;
+            flex-shrink: 0;
+        }
+        .data-item-badge .remove-btn:hover { color: #dc3545; }
+        .data-item-badge.uploading { opacity: 0.6; }
         @keyframes spin {
             from { transform: rotate(0deg); }
             to { transform: rotate(360deg); }
@@ -202,6 +228,35 @@
                                       placeholder="Any specific instructions for module generation (e.g., which features to expose, which functions to wrap)"></textarea>
                         </div>
 
+                        <!-- Example Data -->
+                        <div class="mb-3">
+                            <label class="form-label">Example Data <span class="text-muted fw-normal">(optional)</span></label>
+                            <div class="border rounded p-3 bg-light">
+
+                                <!-- Staged items list -->
+                                <div id="dataItemsList" class="mb-2"></div>
+
+                                <!-- File upload row -->
+                                <div class="d-flex gap-2 flex-wrap align-items-center mb-2">
+                                    <label class="btn btn-outline-secondary btn-sm mb-0" for="dataFileInput" id="dataFileLabel">
+                                        📁 Upload files…
+                                        <input type="file" id="dataFileInput" multiple style="display:none">
+                                    </label>
+                                    <button type="button" class="btn btn-outline-secondary btn-sm" id="addUrlBtn">
+                                        🔗 Add URL
+                                    </button>
+                                </div>
+
+                                <!-- URL input rows (appended dynamically) -->
+                                <div id="urlInputRows"></div>
+
+                                <div class="form-text">Upload local files or provide HTTP/HTTPS URLs. Files are saved into the module directory alongside generated artifacts.</div>
+                            </div>
+                        </div>
+
+                        <!-- Hidden inputs for uploaded file paths (populated by JS) -->
+                        <div id="dataFilePathInputs"></div>
+
                         <div class="mb-4">
                             <label for="resume" class="form-label">Resume Previous Run</label>
                             <select class="form-select" id="resume" name="resume">
@@ -288,6 +343,177 @@
         const csrfToken = document.querySelector('[name=csrfmiddlewaretoken]').value;
         let currentModule = null;
         let pollInterval = null;
+
+        // ── Example-data state ──────────────────────────────────────────────
+        // resumableModuleData: {moduleName: [{original, filename, is_url, local_path}, ...]}
+        const resumableModuleData = {{ resumable_module_data_json|safe }};
+
+        // Items currently staged for submission.
+        // Each entry: {type: 'file'|'url', label: string, value: string}
+        //   type='file'  → value is the absolute server path returned by /upload-data/
+        //   type='url'   → value is the URL string
+        let dataItems = [];
+
+        function renderDataItems() {
+            const list = document.getElementById('dataItemsList');
+            const hiddenContainer = document.getElementById('dataFilePathInputs');
+            list.innerHTML = '';
+            hiddenContainer.innerHTML = '';
+
+            dataItems.forEach((item, idx) => {
+                // Badge
+                const badge = document.createElement('span');
+                badge.className = 'data-item-badge';
+                badge.innerHTML = `
+                    <span class="badge-name" title="${escapeHtml(item.value)}">${item.type === 'file' ? '📄' : '🔗'} ${escapeHtml(item.label)}</span>
+                    <span class="remove-btn" title="Remove" data-idx="${idx}">✕</span>
+                `;
+                badge.querySelector('.remove-btn').addEventListener('click', () => {
+                    dataItems.splice(idx, 1);
+                    renderDataItems();
+                });
+                list.appendChild(badge);
+
+                // Hidden input
+                const inp = document.createElement('input');
+                inp.type = 'hidden';
+                if (item.type === 'file') {
+                    inp.name = 'data_file_path';
+                } else {
+                    inp.name = 'data_url';
+                }
+                inp.value = item.value;
+                hiddenContainer.appendChild(inp);
+            });
+        }
+
+        function escapeHtml(str) {
+            return str.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+        }
+
+        // Compute the expected module_dir name from the tool name (mirrors Python logic)
+        function computeModuleDir() {
+            const name = document.getElementById('name').value.trim();
+            if (!name) return null;
+            const clean = name.toLowerCase().replace(/[ \-]/g, '_').replace(/[^a-z0-9_]/g, '');
+            const now = new Date();
+            const pad = n => String(n).padStart(2, '0');
+            const ts = `${now.getFullYear()}${pad(now.getMonth()+1)}${pad(now.getDate())}_${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
+            return `${clean}_${ts}`;
+        }
+
+        // Lazily-assigned module_dir for the current upload session (reused across multiple file selections)
+        let pendingModuleDir = null;
+
+        function getOrCreatePendingModuleDir() {
+            if (!pendingModuleDir) {
+                pendingModuleDir = computeModuleDir();
+            }
+            return pendingModuleDir;
+        }
+
+        // File input → immediate upload
+        document.getElementById('dataFileInput').addEventListener('change', async function() {
+            const files = Array.from(this.files);
+            if (!files.length) return;
+
+            const moduleDir = getOrCreatePendingModuleDir();
+            if (!moduleDir) {
+                alert('Please enter a tool name before uploading files.');
+                this.value = '';
+                return;
+            }
+
+            for (const file of files) {
+                // Show uploading badge
+                const tempIdx = dataItems.length;
+                dataItems.push({type: 'file', label: file.name + ' (uploading…)', value: ''});
+                renderDataItems();
+
+                const fd = new FormData();
+                fd.append('file', file);
+                fd.append('module_dir', moduleDir);
+
+                try {
+                    const resp = await fetch('{% url "upload_data" %}', {
+                        method: 'POST',
+                        body: fd,
+                        headers: {'X-CSRFToken': csrfToken}
+                    });
+                    const data = await resp.json();
+                    if (!resp.ok) throw new Error(data.error || 'Upload failed');
+
+                    // Replace placeholder
+                    dataItems[tempIdx] = {type: 'file', label: data.filename, value: data.path};
+                } catch (err) {
+                    // Remove failed placeholder
+                    dataItems.splice(tempIdx, 1);
+                    showError(`Upload failed for "${file.name}": ${err.message}`);
+                }
+                renderDataItems();
+            }
+            this.value = '';  // reset so the same file can be re-selected if needed
+        });
+
+        // Add URL button
+        document.getElementById('addUrlBtn').addEventListener('click', () => {
+            const container = document.getElementById('urlInputRows');
+            const row = document.createElement('div');
+            row.className = 'd-flex gap-2 align-items-center mb-2';
+            row.innerHTML = `
+                <input type="url" class="form-control form-control-sm url-entry-input"
+                       placeholder="https://example.com/data.bam" style="flex:1">
+                <button type="button" class="btn btn-outline-danger btn-sm url-remove-btn">✕</button>
+            `;
+            row.querySelector('.url-remove-btn').addEventListener('click', () => row.remove());
+            row.querySelector('.url-entry-input').addEventListener('blur', commitUrlRow);
+            row.querySelector('.url-entry-input').addEventListener('keydown', e => {
+                if (e.key === 'Enter') { e.preventDefault(); commitUrlRow.call(e.target); }
+            });
+            container.appendChild(row);
+            row.querySelector('.url-entry-input').focus();
+        });
+
+        function commitUrlRow() {
+            const input = this;
+            const url = input.value.trim();
+            if (!url) return;
+            if (!url.startsWith('http://') && !url.startsWith('https://')) {
+                input.classList.add('is-invalid');
+                return;
+            }
+            input.classList.remove('is-invalid');
+            dataItems.push({type: 'url', label: url, value: url});
+            renderDataItems();
+            // Remove the inline row
+            const row = input.closest('.d-flex');
+            if (row) row.remove();
+        }
+
+        // ── Resume pre-population ────────────────────────────────────────────
+        function populateDataFromResume(moduleName) {
+            dataItems = [];
+            pendingModuleDir = moduleName;  // uploads on resume go into the existing module dir
+            document.getElementById('urlInputRows').innerHTML = '';
+
+            const items = resumableModuleData[moduleName] || [];
+            items.forEach(item => {
+                if (item.is_url) {
+                    dataItems.push({type: 'url', label: item.original, value: item.original});
+                } else if (item.local_path) {
+                    dataItems.push({type: 'file', label: item.filename, value: item.local_path});
+                }
+            });
+            renderDataItems();
+        }
+
+        function clearDataItems() {
+            dataItems = [];
+            pendingModuleDir = null;
+            document.getElementById('urlInputRows').innerHTML = '';
+            renderDataItems();
+        }
+        // ────────────────────────────────────────────────────────────────────
         let consoleOffset = 0;
         let consoleModalInstance = null;
         let isConsoleModalOpen = false;
@@ -308,6 +534,16 @@
         // Form submission
         document.getElementById('generateForm').addEventListener('submit', async function(e) {
             e.preventDefault();
+
+            // Sweep any uncommitted URL input rows into dataItems before building FormData
+            document.querySelectorAll('#urlInputRows .url-entry-input').forEach(input => {
+                const url = input.value.trim();
+                if (url && (url.startsWith('http://') || url.startsWith('https://'))) {
+                    dataItems.push({type: 'url', label: url, value: url});
+                }
+            });
+            document.getElementById('urlInputRows').innerHTML = '';
+            renderDataItems();
 
             const formData = new FormData(this);
             const generateBtn = document.getElementById('generateBtn');
@@ -341,6 +577,9 @@
                 btnText.textContent = 'Generating...';
                 statusText.textContent = '🔄 Module generation in progress...';
                 statusText.style.cursor = 'pointer';
+
+                // Reset example data for the next run
+                clearDataItems();
 
                 // Add the running module to the sidebar
                 addRunningModuleToSidebar(currentModule);
@@ -626,9 +865,12 @@
                 nameInput.removeAttribute('required');
                 nameInput.value = '';
                 nameInput.placeholder = 'Not needed when resuming';
+                // Pre-populate example data from persisted status
+                populateDataFromResume(this.value);
             } else {
                 nameInput.setAttribute('required', 'required');
                 nameInput.placeholder = 'e.g., samtools, bwa, star';
+                clearDataItems();
             }
         });
 

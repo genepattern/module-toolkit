@@ -335,8 +335,19 @@ class ModuleAgent:
             }
         }
     
-    def create_module_directory(self, tool_name: str) -> Path:
-        """Create and return the module directory path"""
+    def create_module_directory(self, tool_name: str, module_dir: str = "") -> Path:
+        """Create and return the module directory path.
+
+        If *module_dir* is a non-empty absolute (or relative) path it is used
+        directly, allowing the caller (e.g. the web UI) to guarantee that
+        uploaded files and generated artifacts share the same directory.
+        """
+        if module_dir:
+            module_path = Path(module_dir)
+            self.logger.print_status(f"Creating module directory: {module_path}")
+            module_path.mkdir(parents=True, exist_ok=True)
+            return module_path
+
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         tool_name_clean = tool_name.lower().replace(' ', '_').replace('-', '_')
         module_dir_name = f"{tool_name_clean}_{timestamp}"
@@ -1642,8 +1653,11 @@ Make sure the generated artifact follows all guidelines, key requirements and cr
 
         else:
             self.logger.print_status(f"Generating module for: {tool_info['name']}")
-            # Create module directory
-            module_path = self.create_module_directory(tool_info['name'])
+            # Create module directory (use pre-created path from web UI if supplied)
+            module_path = self.create_module_directory(
+                tool_info['name'],
+                module_dir=tool_info.get('module_dir', ''),
+            )
             # Initialize status tracking
             status = ModuleGenerationStatus(
                 tool_name=tool_info['name'],
@@ -1833,7 +1847,12 @@ class GenerationScript:
 
         # Output directory
         parser.add_argument('--output-dir', default=DEFAULT_OUTPUT_DIR, type=str, help=f'Output directory for generated modules (default: {DEFAULT_OUTPUT_DIR})')
-        
+
+        # Pre-created module directory (used by the web UI to guarantee name consistency)
+        parser.add_argument('--module-dir', type=str, metavar='PATH',
+                            help='Use this pre-created directory as the module output directory instead of '
+                                 'generating a new timestamped name under --output-dir.')
+
         # Zip options
         parser.add_argument('--no-zip', action='store_true', help='Skip creating a zip archive of artifact files')
         parser.add_argument('--zip-only', action='store_true', help='After creating zip archive, delete the individual artifact files (keeps only the zip)')
@@ -1860,6 +1879,7 @@ class GenerationScript:
             'documentation_url': self.args.documentation_url or "",
             'instructions': self.args.instructions or "",
             'example_data': [],
+            'module_dir': self.args.module_dir or "",
         }
         # Resolve --data items if provided
         if self.args.data:
