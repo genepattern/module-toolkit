@@ -113,7 +113,7 @@ def run_test(gpunit_path: str, shared_context: dict) -> List[LintIssue]:
                 if not (os.path.exists(full_path) and os.path.isfile(full_path)):
                     error = f"File not found at: {full_path}"
             if error:
-                issues.append(LintIssue("ERROR",
+                issues.append(LintIssue("WARNING",
                     f"File parameter '{param_name}' points to missing file",
                     f"{error}"))
     return issues

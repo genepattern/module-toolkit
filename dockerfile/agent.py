@@ -45,6 +45,16 @@ CRITICAL PACKAGE VALIDATION RULES:
   an 'Unable to locate package X' error, that package name is wrong — verify and correct it
   before generating the new Dockerfile.
 
+USING THE create_dockerfile TOOL:
+- The create_dockerfile tool now accepts two explicit arguments that you MUST supply:
+  * wrapper_source (str): the FULL source code of the wrapper script. The tool will parse
+    its import/library statements programmatically to determine the exact pip or R packages
+    that need to be installed. Pass an empty string only if no wrapper source is available.
+  * planning_data (dict): the module planning data dictionary with keys such as
+    wrapper_script, parameters, input_file_formats, cpu_cores, memory, docker_image_tag.
+- Passing these arguments allows the tool to produce a Dockerfile that reflects the
+  wrapper's ACTUAL dependencies rather than guessing.
+
 Guidelines:
 - Minimize image size while ensuring all dependencies are available
 - Use specific version tags for base images to ensure reproducibility
@@ -302,20 +312,144 @@ def verify_apt_packages(context: RunContext[str], packages: list[str], base_imag
     return report
 
 
+def _parse_python_imports(source: str) -> list[str]:
+    """Return a sorted list of top-level module names imported in *source*.
+
+    Handles both ``import foo`` and ``from foo import bar`` forms, including
+    aliases (``import numpy as np``).  Only the *top-level* package name is
+    returned (e.g. ``sklearn`` for ``from sklearn.linear_model import ...``).
+    """
+    import ast
+    modules: list[str] = []
+    try:
+        tree = ast.parse(source)
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                for alias in node.names:
+                    top = alias.name.split(".")[0]
+                    if top:
+                        modules.append(top)
+            elif isinstance(node, ast.ImportFrom):
+                if node.module:
+                    top = node.module.split(".")[0]
+                    if top:
+                        modules.append(top)
+    except SyntaxError:
+        # Fall back to a simple regex scan if the source can't be parsed
+        import re
+        for m in re.finditer(r'^\s*(?:import|from)\s+([\w]+)', source, re.MULTILINE):
+            modules.append(m.group(1))
+    return sorted(set(modules))
+
+
+def _parse_r_imports(source: str) -> list[str]:
+    """Return a sorted list of R package names referenced via library() or require()."""
+    import re
+    packages: list[str] = []
+    # Matches library("pkg"), library('pkg'), library(pkg), require(...) in the same forms
+    for m in re.finditer(
+        r'\b(?:library|require)\s*\(\s*["\']?([A-Za-z][A-Za-z0-9._]*)["\']?\s*\)',
+        source,
+    ):
+        packages.append(m.group(1))
+    return sorted(set(packages))
+
+
+# Mapping of Python stdlib module names that should NOT be treated as pip packages.
+_PYTHON_STDLIB = frozenset({
+    "abc", "argparse", "ast", "asyncio", "base64", "binascii", "builtins",
+    "calendar", "cgi", "cgitb", "cmd", "code", "codecs", "codeop", "collections",
+    "colorsys", "compileall", "configparser", "contextlib", "copy", "copyreg",
+    "csv", "ctypes", "curses", "dataclasses", "datetime", "dbm", "decimal",
+    "difflib", "dis", "doctest", "email", "encodings", "enum", "errno",
+    "faulthandler", "fcntl", "filecmp", "fileinput", "fnmatch", "fractions",
+    "ftplib", "functools", "gc", "getopt", "getpass", "gettext", "glob",
+    "grp", "gzip", "hashlib", "heapq", "hmac", "html", "http", "idlelib",
+    "imaplib", "importlib", "inspect", "io", "ipaddress", "itertools", "json",
+    "keyword", "lib2to3", "linecache", "locale", "logging", "lzma",
+    "mailbox", "marshal", "math", "mimetypes", "mmap", "modulefinder",
+    "multiprocessing", "netrc", "nis", "nntplib", "numbers", "operator",
+    "optparse", "os", "ossaudiodev", "pathlib", "pdb", "pickle", "pickletools",
+    "pipes", "pkgutil", "platform", "plistlib", "poplib", "posix", "posixpath",
+    "pprint", "profile", "pstats", "pty", "pwd", "py_compile", "pyclbr",
+    "pydoc", "queue", "quopri", "random", "re", "readline", "reprlib",
+    "resource", "rlcompleter", "runpy", "sched", "secrets", "select",
+    "selectors", "shelve", "shlex", "shutil", "signal", "site", "smtpd",
+    "smtplib", "sndhdr", "socket", "socketserver", "spwd", "sqlite3",
+    "sre_compile", "sre_constants", "sre_parse", "ssl", "stat", "statistics",
+    "string", "stringprep", "struct", "subprocess", "sunau", "symtable",
+    "sys", "sysconfig", "syslog", "tabnanny", "tarfile", "telnetlib",
+    "tempfile", "termios", "test", "textwrap", "threading", "time",
+    "timeit", "tkinter", "token", "tokenize", "tomllib", "trace", "traceback",
+    "tracemalloc", "tty", "turtle", "turtledemo", "types", "typing",
+    "unicodedata", "unittest", "urllib", "uu", "uuid", "venv", "warnings",
+    "wave", "weakref", "webbrowser", "wsgiref", "xdrlib", "xml", "xmlrpc",
+    "zipapp", "zipfile", "zipimport", "zlib", "zoneinfo",
+    # common local names that aren't pip packages
+    "__future__", "_thread", "abc",
+})
+
+# Mapping from import name → pip package name when they differ
+_IMPORT_TO_PIP: dict[str, str] = {
+    "sklearn": "scikit-learn",
+    "cv2": "opencv-python",
+    "PIL": "Pillow",
+    "bs4": "beautifulsoup4",
+    "yaml": "PyYAML",
+    "dotenv": "python-dotenv",
+    "Bio": "biopython",
+    "pydantic_ai": "pydantic-ai",
+    "google": "google-cloud",
+    "Crypto": "pycryptodome",
+    "gi": "PyGObject",
+    "wx": "wxPython",
+    "usearch": "usearch",
+}
+
+
+def _infer_pip_packages(imports: list[str]) -> list[str]:
+    """Convert a list of raw import names to pip package names.
+
+    Filters out stdlib modules and maps known import→package renames.
+    """
+    packages: list[str] = []
+    for imp in imports:
+        if imp in _PYTHON_STDLIB:
+            continue
+        packages.append(_IMPORT_TO_PIP.get(imp, imp))
+    return sorted(set(packages))
+
+
 @dockerfile_agent.tool
-def create_dockerfile(context: RunContext[str]) -> str:
+def create_dockerfile(
+    context: RunContext[str],
+    wrapper_source: str = "",
+    planning_data: dict = None,
+) -> str:
     """
     Generate a complete Dockerfile for the GenePattern module.
-    
+
+    The tool now accepts the wrapper source code and planning data as
+    **explicit arguments** so it can parse import statements programmatically
+    and produce a Dockerfile that reflects the wrapper's actual dependencies
+    rather than making assumptions.
+
     Args:
-        context: RunContext with dependencies containing tool_info, planning_data, error_report, and attempt
+        context: RunContext with dependencies containing tool_info, error_report, and attempt.
+        wrapper_source: Full source code of the wrapper script (wrapper.py / wrapper.R / etc.).
+                        Pass an empty string when the wrapper has not been generated yet.
+        planning_data: Dictionary with module plan fields (wrapper_script, parameters,
+                       input_file_formats, cpu_cores, memory, docker_image_tag, …).
+                       When omitted the tool falls back to context.deps['planning_data'].
 
     Returns:
         Complete Dockerfile content ready for validation
     """
     # Extract data from context dependencies
     tool_info = context.deps.get('tool_info', {})
-    planning_data = context.deps.get('planning_data', {})
+    # Prefer the explicit argument; fall back to context deps for backwards compat
+    if planning_data is None:
+        planning_data = context.deps.get('planning_data', {}) or {}
     error_report = context.deps.get('error_report', '')
     attempt = context.deps.get('attempt', 1)
 
@@ -343,6 +477,36 @@ def create_dockerfile(context: RunContext[str]) -> str:
             print(f"✓ Using input_file_formats from planning_data: {input_formats}")
         print(f"✓ Using wrapper_script from planning_data: {wrapper_script}")
         print(f"✓ Analyzing {len(parameters)} parameters for dependency hints")
+
+        # ------------------------------------------------------------------ #
+        # Parse wrapper source for actual import dependencies                 #
+        # ------------------------------------------------------------------ #
+        wrapper_filename = wrapper_script or 'wrapper.py'
+        wrapper_language = 'python'  # default
+        if wrapper_filename.endswith('.R') or wrapper_filename.endswith('.r'):
+            wrapper_language = 'r'
+        elif wrapper_filename.endswith('.sh') or wrapper_filename.endswith('.bash'):
+            wrapper_language = 'bash'
+
+        parsed_pip_packages: list[str] = []
+        parsed_r_packages: list[str] = []
+
+        if wrapper_source and wrapper_source.strip():
+            if wrapper_language == 'python':
+                raw_imports = _parse_python_imports(wrapper_source)
+                parsed_pip_packages = _infer_pip_packages(raw_imports)
+                if parsed_pip_packages:
+                    print(f"✓ Parsed pip packages from wrapper imports: {parsed_pip_packages}")
+                else:
+                    print("ℹ️  No third-party pip packages detected in wrapper imports")
+            elif wrapper_language == 'r':
+                parsed_r_packages = _parse_r_imports(wrapper_source)
+                if parsed_r_packages:
+                    print(f"✓ Parsed R packages from wrapper library() calls: {parsed_r_packages}")
+                else:
+                    print("ℹ️  No R packages detected in wrapper library() calls")
+        else:
+            print("ℹ️  No wrapper_source provided; falling back to heuristic dependency selection")
 
         # Analyze input formats to determine required system tools
         format_tools = set()
@@ -394,10 +558,6 @@ def create_dockerfile(context: RunContext[str]) -> str:
         # Combine all detected tools
         all_tools = format_tools | param_tools
 
-        
-
-        # IMPORTANT: Always use wrapper_script from planning_data
-        wrapper_filename = wrapper_script
         if not wrapper_filename:
             # Only use fallback if wrapper_script is completely missing
             ext_map = {'python': '.py', 'r': '.R', 'bash': '.sh'}
@@ -405,13 +565,6 @@ def create_dockerfile(context: RunContext[str]) -> str:
             print(f"⚠️  No wrapper_script in planning_data, using fallback: {wrapper_filename}")
         else:
             print(f"✓ Using wrapper_script from planning_data for COPY command: {wrapper_filename}")
-            
-        # make sure the language of the wrapper matches is included if its not the same as for the tool
-        wrapper_language = 'python'  # default
-        if wrapper_filename.endswith('.R') or wrapper_filename.endswith('.r'):
-            wrapper_language = 'r'
-        elif wrapper_filename.endswith('.sh') or wrapper_filename.endswith('.bash'):
-            wrapper_language = 'bash'
 
         # Determine base image based on language
         if language == 'python' or wrapper_language == 'python':
@@ -428,10 +581,16 @@ def create_dockerfile(context: RunContext[str]) -> str:
             install_cmd = 'apt-get install -y'
 
         # Generate Dockerfile content with planning data
+        wrapper_source_note = (
+            f"# Wrapper imports parsed programmatically from {wrapper_filename}"
+            if wrapper_source and wrapper_source.strip()
+            else "# No wrapper source provided; dependencies are heuristic"
+        )
         dockerfile_content = f"""# Dockerfile for {tool_name} GenePattern Module
 # Generated from planning data
 # Resource requirements: {cpu_cores} CPU cores, {memory} memory
 # Supported input formats: {', '.join(input_formats) if input_formats else 'various'}
+{wrapper_source_note}
 FROM {base_image}
 
 # Metadata labels
@@ -476,15 +635,33 @@ RUN apt-get update && \\
 
         # Add language-specific installation
         if language == 'python' or wrapper_language == 'python':
-            # Try to install the tool, but don't fail if it's not available
-            dockerfile_content += f"""# Install Python dependencies
+            if parsed_pip_packages:
+                # Use packages inferred directly from wrapper imports
+                pip_list = " ".join(parsed_pip_packages)
+                dockerfile_content += f"""# Install Python dependencies (inferred from wrapper imports)
+RUN {install_cmd} {pip_list}
+
+"""
+            else:
+                # Fallback: try installing the tool by name; if unavailable, install a
+                # common scientific stack so the wrapper has something to import.
+                dockerfile_content += f"""# Install Python dependencies
 # Install the tool if available via pip, otherwise install common scientific packages
 RUN {install_cmd} {tool_name.lower()} || \\
     {install_cmd} numpy pandas scipy matplotlib seaborn scikit-learn
 
 """
-        elif language == 'r':
-            dockerfile_content += f"""# Install R packages
+        elif language == 'r' or wrapper_language == 'r':
+            if parsed_r_packages:
+                # Build individual install lines from parsed packages
+                r_pkg_list = ", ".join(f"'{p}'" for p in parsed_r_packages)
+                dockerfile_content += f"""# Install R packages (inferred from wrapper library() calls)
+RUN {install_cmd} "install.packages(c({r_pkg_list}), repos='http://cran.r-project.org')" || \\
+    {install_cmd} "BiocManager::install(c({r_pkg_list}))" || true
+
+"""
+            else:
+                dockerfile_content += f"""# Install R packages
 # Install from CRAN or Bioconductor
 RUN {install_cmd} "install.packages(c('optparse', 'futile.logger'), repos='http://cran.r-project.org')" && \\
     {install_cmd} "if (!requireNamespace('BiocManager', quietly = TRUE)) install.packages('BiocManager', repos='http://cran.r-project.org')"
@@ -495,12 +672,12 @@ RUN {install_cmd} "install.packages('{tool_name}', repos='http://cran.r-project.
 
 """
         elif language == 'java':
-            dockerfile_content += f"""# Java-based tool
+            dockerfile_content += """# Java-based tool
 # Tool JAR should be provided in module files
 
 """
 
-        
+
         # Add module files with proper wrapper script name
         # Only copy files that are required and always present
         dockerfile_content += f"""# Copy required module files

@@ -643,6 +643,16 @@ class ModuleAgent:
         }
         self.save_status(status, dev_mode)
 
+        def build_error_history() -> str:
+            """Build a numbered history of all previous errors for this artifact."""
+            errors = status.artifacts_status[artifact_name].get('errors', [])
+            if not errors:
+                return ""
+            lines = ["Previous attempt errors (avoid repeating these mistakes):"]
+            for i, err in enumerate(errors, 1):
+                lines.append(f"\nAttempt {i} error:\n{err}")
+            return "\n".join(lines)
+
         for attempt in range(1, max_loops + 1):
             try:
                 self.logger.print_status(f"Generating {artifact_name} (attempt {attempt}/{max_loops})")
@@ -675,6 +685,7 @@ class ModuleAgent:
                         example_data_section = "\n".join(lines)
 
                     # For manifest, use a direct prompt that doesn't mention tool names
+                    error_history = build_error_history()
                     prompt = f"""Generate a complete GenePattern module manifest for {tool_info['name']}.
 
 Tool Information:
@@ -687,7 +698,7 @@ Tool Information:
 Planning Data:
 {planning_data_dict}
 
-{"Previous attempt failed with error: " + error_report if error_report else ""}
+{error_history if error_history else ""}
 
 This is attempt {attempt} of {max_loops}.
 {example_data_section}
@@ -712,9 +723,10 @@ Generate a complete, valid manifest file in key=value format."""
                             lines.append("representative values. Do not invent placeholder strings like '<path_to_input>'.")
                             example_data_section = "\n".join(lines)
 
+                    error_history = build_error_history()
                     prompt = f"""Generate the {artifact_name} artifact for the GenePattern module '{tool_info['name']}'.
 
-{"Previous attempt failed with error: " + error_report if error_report else ""}
+{error_history if error_history else ""}
 
 This is attempt {attempt} of {max_loops}.{instructions_section}{example_data_section}
 
@@ -747,9 +759,10 @@ Make sure the generated artifact follows all guidelines, key requirements and cr
                         lines.append("'Input Files' group rather than splitting them across unrelated groups).")
                         example_data_section = "\n".join(lines)
 
+                    error_history = build_error_history()
                     prompt = f"""Generate the {artifact_name} artifact for the GenePattern module '{tool_info['name']}'.
 
-{"Previous attempt failed with error: " + error_report if error_report else ""}
+{error_history if error_history else ""}
 
 This is attempt {attempt} of {max_loops}.{instructions_section}{example_data_section}
 
@@ -780,9 +793,57 @@ Make sure the generated artifact follows all guidelines, key requirements and cr
                         lines.append("handles this format — install support for all formats the tool accepts.")
                         example_data_section = "\n".join(lines)
 
-                    # Fix 1 & 3: Extract specific actionable error lines from the full
-                    # build log so the LLM sees them clearly rather than having to find
-                    # them buried in hundreds of lines of Docker output.
+                    # Improvement 1: Read wrapper source and expose it so the LLM can
+                    # infer the correct pip/CRAN/apt packages to install.
+                    wrapper_source_section = ""
+                    _wrapper_script = planning_data_dict.get('wrapper_script') or 'wrapper.py'
+                    _wrapper_path = module_path / _wrapper_script
+                    if _wrapper_path.exists():
+                        try:
+                            _wrapper_src = _wrapper_path.read_text(encoding='utf-8', errors='replace')
+                            wrapper_source_section = (
+                                f"\n\nWrapper Script ({_wrapper_script}) — use this to determine "
+                                f"which packages must be installed in the image:\n"
+                                f"```\n{_wrapper_src}\n```"
+                            )
+                        except Exception as _we:
+                            self.logger.print_status(f"Could not read wrapper for dockerfile prompt: {_we}", "WARNING")
+
+                    # Improvement 2 & 3: Build error history from ALL previous attempts,
+                    # and truncate each raw log to structured errors + last 50 lines.
+                    def _truncate_error_report(raw: str, max_tail: int = 50) -> str:
+                        """Return structured error lines + last `max_tail` lines of raw output."""
+                        error_indicators = [
+                            'E: Unable to locate package', 'E: Package',
+                            'ERROR:', 'error:', 'No such file or directory',
+                            'ModuleNotFoundError', 'ImportError', 'command not found',
+                            'exit code:', 'executor failed', 'FAILED',
+                            'the following arguments are required:', 'usage:',
+                            'unexpected end of statement', 'failed to process',
+                        ]
+                        extracted = []
+                        for ln in raw.splitlines():
+                            if any(ind in ln for ind in error_indicators):
+                                sanitized = _sanitize_error_line(ln)
+                                if sanitized and sanitized not in extracted:
+                                    extracted.append(sanitized)
+                        tail_lines = raw.splitlines()[-max_tail:]
+                        parts = []
+                        if extracted:
+                            parts.append("KEY ERRORS:\n" + "\n".join(f"  - {e}" for e in extracted))
+                        parts.append("LAST 50 LINES OF OUTPUT:\n" + "\n".join(tail_lines))
+                        return "\n\n".join(parts)
+
+                    all_errors = status.artifacts_status[artifact_name].get('errors', [])
+                    error_history_section = ""
+                    if all_errors:
+                        history_parts = ["Previous attempt errors (do NOT repeat these mistakes):"]
+                        for i, prev_err in enumerate(all_errors, 1):
+                            truncated = _truncate_error_report(prev_err)
+                            history_parts.append(f"\n--- Attempt {i} error ---\n{truncated}")
+                        error_history_section = "\n".join(history_parts)
+
+                    # Build per-attempt structured guidance from the latest error
                     structured_errors_section = ""
                     if error_report:
                         error_indicators = [
@@ -809,7 +870,7 @@ Make sure the generated artifact follows all guidelines, key requirements and cr
                                 if sanitized and sanitized not in extracted:
                                     extracted.append(sanitized)
                         if extracted:
-                            structured_errors_section = "\n\nKEY ERRORS FROM PREVIOUS ATTEMPT (fix these specifically):\n"
+                            structured_errors_section = "\n\nKEY ERRORS FROM MOST RECENT ATTEMPT (fix these specifically):\n"
                             structured_errors_section += "\n".join(f"  - {e}" for e in extracted)
                             structured_errors_section += (
                                 "\n\nBefore writing apt-get install commands, use the verify_apt_packages tool "
@@ -831,17 +892,18 @@ Make sure the generated artifact follows all guidelines, key requirements and cr
                                 )
 
                     prompt = f"""Generate the {artifact_name} artifact for the GenePattern module '{tool_info['name']}'.
-
-{"Previous attempt failed. Full error report:" + chr(10) + error_report if error_report else ""}
+{wrapper_source_section}
+{error_history_section if error_history_section else ""}
 {structured_errors_section}
 
 This is attempt {attempt} of {max_loops}.{instructions_section}{example_data_section}
 
 Call the {create_method} tool with the following parameters:
-- tool_info: Use the tool information provided
-- planning_data: Use the planning data provided
+- wrapper_source: Pass the FULL wrapper script source shown above in the "Wrapper Script" section (pass an empty string if no wrapper source was shown).
+- planning_data: Pass the planning data as a dictionary with keys: wrapper_script, parameters, input_file_formats, cpu_cores, memory, docker_image_tag.
 - error_report: {repr(error_report)}
 - attempt: {attempt}.
+The tool will parse the wrapper's import statements programmatically to determine the correct pip/R packages to install.
 Make sure the generated artifact follows all guidelines, key requirements and critical rules and edit what the tool gave you as needed."""
 
                 else:
@@ -850,10 +912,11 @@ Make sure the generated artifact follows all guidelines, key requirements and cr
                     if tool_info.get('instructions'):
                         instructions_section = f"\n\nIMPORTANT - Additional Instructions:\n{tool_info['instructions']}\n"
 
+                    error_history = build_error_history()
                     # For other artifacts, use a simpler prompt that instructs the LLM to call the tool
                     prompt = f"""Generate the {artifact_name} artifact for the GenePattern module '{tool_info['name']}'.
 
-{"Previous attempt failed with error: " + error_report if error_report else ""}
+{error_history if error_history else ""}
 
 This is attempt {attempt} of {max_loops}.{instructions_section}
 

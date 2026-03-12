@@ -856,7 +856,7 @@ def validate_module_plan(context: RunContext[ModulePlan], plan: ModulePlan) -> s
         all_issues.append(f"Invalid parameter names: {', '.join(param_issues)}")
 
     # Validate command line contains all parameters
-    cmdline_result = validate_command_line(context, plan)
+    cmdline_result = validate_command_line(context, plan.command_line, plan.parameters, plan.wrapper_script or "wrapper.py")
     cmdline_has_issues = "ISSUES FOUND" in cmdline_result
     if cmdline_has_issues:
         # Extract missing parameter count from the result
