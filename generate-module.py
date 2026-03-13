@@ -1791,10 +1791,65 @@ Make sure the generated artifact follows all guidelines, key requirements and cr
                     except Exception as e:
                         self.logger.print_status(f"  Failed to delete {file.name}: {str(e)}", "WARNING")
 
-            return True
+            return zip_path
 
         except Exception as e:
             self.logger.print_status(f"Failed to create zip archive: {str(e)}", "ERROR")
+            self.logger.print_status(f"Traceback: {traceback.format_exc()}", "DEBUG")
+            return None
+
+    def upload_to_genepattern(self, zip_path: Path, gp_server: str, gp_user: str, gp_password: str) -> bool:
+        """
+        Upload a module zip file to a GenePattern server.
+
+        Args:
+            zip_path: Path to the zip file to upload
+            gp_server: GenePattern server URL (e.g., http://host:port/gp)
+            gp_user: GenePattern username
+            gp_password: GenePattern password
+
+        Returns:
+            True if upload was successful, False otherwise
+        """
+        self.logger.print_section("Uploading to GenePattern")
+        endpoint = f"{gp_server.rstrip('/')}/rest/v1/tasks/installModule"
+        self.logger.print_status(f"Uploading {zip_path.name} to {endpoint}")
+
+        try:
+            with open(zip_path, 'rb') as f:
+                response = requests.post(
+                    endpoint,
+                    auth=(gp_user, gp_password),
+                    files={'file': (zip_path.name, f, 'application/zip')},
+                    data={'privacy': '1'},
+                )
+
+            try:
+                result = response.json()
+            except Exception:
+                result = {}
+
+            status = result.get('status', '')
+            message = result.get('message', response.text[:200])
+
+            if status == 'success':
+                self.logger.print_status(f"✅ {message}", "SUCCESS")
+                return True
+            elif status == 'failed':
+                self.logger.print_status(f"Upload failed: {message}", "ERROR")
+                return False
+            elif response.status_code in (200, 201):
+                # No JSON body but HTTP success
+                self.logger.print_status(f"✅ Module uploaded successfully (HTTP {response.status_code})", "SUCCESS")
+                return True
+            else:
+                self.logger.print_status(
+                    f"Upload failed: HTTP {response.status_code} — {message}", "ERROR"
+                )
+                return False
+
+        except Exception as e:
+            self.logger.print_status(f"Upload failed: {str(e)}", "ERROR")
             self.logger.print_status(f"Traceback: {traceback.format_exc()}", "DEBUG")
             return False
 
@@ -1881,7 +1936,7 @@ Make sure the generated artifact follows all guidelines, key requirements and cr
                 for error in status.error_messages:
                     print(f"  - {error}")
 
-    def run(self, tool_info: Dict[str, str] = None, skip_artifacts: List[str] = None, dev_mode: bool = False, resume_status: ModuleGenerationStatus = None, max_loops: int = MAX_ARTIFACT_LOOPS, no_zip: bool = False, zip_only: bool = False, docker_push: bool = False, example_data: List[ExampleDataItem] = None, max_escalations: int = MAX_ESCALATIONS) -> int:
+    def run(self, tool_info: Dict[str, str] = None, skip_artifacts: List[str] = None, dev_mode: bool = False, resume_status: ModuleGenerationStatus = None, max_loops: int = MAX_ARTIFACT_LOOPS, no_zip: bool = False, zip_only: bool = False, docker_push: bool = False, example_data: List[ExampleDataItem] = None, max_escalations: int = MAX_ESCALATIONS, gp_server: str = None, gp_user: str = None, gp_password: str = None) -> int:
         """Run the complete module generation process"""
 
         # Handle resume mode
@@ -2022,8 +2077,13 @@ Make sure the generated artifact follows all guidelines, key requirements and cr
             self.cleanup_data_dir(module_path)
 
         # Phase 4: Zip artifacts (if successful and not disabled)
+        zip_path = None
         if artifacts_success and not no_zip:
-            self.zip_artifacts(module_path, tool_info['name'], zip_only)
+            zip_path = self.zip_artifacts(module_path, tool_info['name'], zip_only)
+
+        # Phase 4b: Upload to GenePattern (if zip succeeded and credentials are provided)
+        if zip_path and gp_server and gp_user:
+            self.upload_to_genepattern(zip_path, gp_server, gp_user, gp_password)
 
         # Phase 5: Docker push (if enabled)
         if artifacts_success and docker_push:
@@ -2152,6 +2212,17 @@ class GenerationScript:
         # Docker push
         parser.add_argument('--docker-push', action='store_true', help='Push the Docker image to Docker Hub after building')
 
+        # GenePattern upload
+        parser.add_argument('--gp-server', type=str, metavar='URL',
+                            default=os.getenv('GP_SERVER', 'https://beta.genepattern.org'),
+                            help='GenePattern server URL to upload the module zip to (default: https://beta.genepattern.org, or GP_SERVER env var)')
+        parser.add_argument('--gp-user', type=str, metavar='USERNAME',
+                            default=os.getenv('GP_USER', ''),
+                            help='GenePattern username (or set GP_USER env var)')
+        parser.add_argument('--gp-password', type=str, metavar='PASSWORD',
+                            default=os.getenv('GP_PASSWORD', ''),
+                            help='GenePattern password (or set GP_PASSWORD env var)')
+
         # Example data
         parser.add_argument('--data', nargs='+', metavar='PATH_OR_URL',
                             help='Example data files (local paths or HTTP/HTTPS URLs). URLs are downloaded '
@@ -2234,6 +2305,9 @@ class GenerationScript:
                     docker_push=self.args.docker_push,
                     example_data=resume_example_data,
                     max_escalations=self.args.max_escalations,
+                    gp_server=self.args.gp_server,
+                    gp_user=self.args.gp_user,
+                    gp_password=self.args.gp_password,
                 )
             else:
                 # Get tool information from args or user input
@@ -2255,6 +2329,9 @@ class GenerationScript:
                     docker_push=self.args.docker_push,
                     example_data=example_data,
                     max_escalations=self.args.max_escalations,
+                    gp_server=self.args.gp_server,
+                    gp_user=self.args.gp_user,
+                    gp_password=self.args.gp_password,
                 )
 
         except KeyboardInterrupt:
