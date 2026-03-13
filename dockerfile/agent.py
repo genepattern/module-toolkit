@@ -541,8 +541,17 @@ def create_dockerfile(
         # Analyze parameters for additional dependency hints
         param_tools = set()
         for param in parameters:
-            param_name = param.get('name', '').lower()
-            param_desc = param.get('description', '').lower()
+            # Handle parameters that may be dicts, Pydantic objects, or plain strings
+            if isinstance(param, str):
+                param_name = param.lower()
+                param_desc = ''
+            elif isinstance(param, dict):
+                param_name = param.get('name', '').lower()
+                param_desc = param.get('description', '').lower()
+            else:
+                # Pydantic model or other object with attributes
+                param_name = getattr(param, 'name', '').lower()
+                param_desc = getattr(param, 'description', '').lower()
 
             # Look for references to specific tools in parameter names/descriptions
             if 'samtools' in param_name or 'samtools' in param_desc:

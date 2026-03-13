@@ -40,6 +40,7 @@ from paramgroups.agent import paramgroups_agent
 from paramgroups.models import ParamgroupsModel
 from documentation.agent import documentation_agent
 from gpunit.agent import gpunit_agent
+from agents.error_classifier import classify_error, should_escalate, RootCause
 
 
 _VALID_GPUNIT_TYPES = {'text', 'number', 'file'}
@@ -87,6 +88,29 @@ DEFAULT_OUTPUT_DIR = os.getenv('MODULE_OUTPUT_DIR', './generated-modules')
 # Token cost configuration (cost per 1000 tokens)
 INPUT_TOKEN_COST_PER_1000 = float(os.getenv('INPUT_TOKEN_COST_PER_1000', '0.003'))
 OUTPUT_TOKEN_COST_PER_1000 = float(os.getenv('OUTPUT_TOKEN_COST_PER_1000', '0.015'))
+
+# Cross-artifact escalation configuration
+MAX_ESCALATIONS = int(os.getenv('MAX_ESCALATIONS', '2'))
+
+# Artifact dependency graph: when a downstream artifact fails, these are the
+# upstream artifacts that *could* be the root cause (in priority order).
+ARTIFACT_DEPENDENCIES = {
+    'dockerfile': ['wrapper', 'manifest', 'gpunit'],
+    'gpunit': ['wrapper', 'manifest'],
+    'manifest': ['wrapper'],
+    'paramgroups': ['wrapper', 'manifest'],
+    'documentation': [],
+    'wrapper': [],
+}
+
+
+@dataclass
+class ArtifactResult:
+    """Structured result from an artifact_creation_loop call."""
+    success: bool
+    artifact_name: str
+    error_text: str = ""          # raw validation error from the last failed attempt
+    root_cause: Optional[RootCause] = None  # populated when classification is available
 
 
 @dataclass
@@ -208,12 +232,18 @@ class ModuleGenerationStatus:
     # Token tracking fields
     input_tokens: int = 0
     output_tokens: int = 0
+    # Cross-artifact escalation tracking: artifact_name -> count
+    escalation_counts: Dict[str, int] = None
+    # Log of escalation events for debugging / reporting
+    escalation_log: List[Dict[str, str]] = None
 
     def __post_init__(self):
         if self.artifacts_status is None: self.artifacts_status = {}
         if self.error_messages is None: self.error_messages = []
         if self.research_data is None: self.research_data = {}
         if self.example_data is None: self.example_data = []
+        if self.escalation_counts is None: self.escalation_counts = {}
+        if self.escalation_log is None: self.escalation_log = []
 
     @property
     def research_complete(self) -> bool:
@@ -261,6 +291,8 @@ class ModuleGenerationStatus:
             'output_tokens': self.output_tokens,
             'estimated_cost': self.get_estimated_cost(),
             'example_data': [item.to_dict() for item in (self.example_data or [])],
+            'escalation_counts': self.escalation_counts or {},
+            'escalation_log': self.escalation_log or [],
         }
 
         # Serialize planning_data if present (it's a Pydantic model)
@@ -462,6 +494,8 @@ class ModuleAgent:
                 input_tokens=data.get('input_tokens', 0),
                 output_tokens=data.get('output_tokens', 0),
                 example_data=[ExampleDataItem.from_dict(d) for d in data.get('example_data', [])],
+                escalation_counts=data.get('escalation_counts', {}),
+                escalation_log=data.get('escalation_log', []),
             )
 
             self.logger.print_status(f"Loaded status from {status_path}")
@@ -595,7 +629,7 @@ class ModuleAgent:
             self.logger.print_status(f"Traceback: {traceback.format_exc()}", "DEBUG")
             return False, None
 
-    def artifact_creation_loop(self, artifact_name: str, tool_info: Dict[str, str], planning_data: ModulePlan, module_path: Path, status: ModuleGenerationStatus, max_loops: int = MAX_ARTIFACT_LOOPS, dev_mode: bool = False) -> bool:
+    def artifact_creation_loop(self, artifact_name: str, tool_info: Dict[str, str], planning_data: ModulePlan, module_path: Path, status: ModuleGenerationStatus, max_loops: int = MAX_ARTIFACT_LOOPS, dev_mode: bool = False, downstream_error_context: str = "") -> ArtifactResult:
         """Generate and validate a single artifact using its dedicated agent"""
         artifact_config = self.artifact_agents[artifact_name]
         agent = artifact_config['agent']
@@ -634,12 +668,15 @@ class ModuleAgent:
         file_path = module_path / filename
         error_report = ""
 
-        # Initialize artifact status
+        # Initialize artifact status (preserve errors from previous runs during escalation)
+        existing_errors = []
+        if artifact_name in status.artifacts_status:
+            existing_errors = status.artifacts_status[artifact_name].get('errors', [])
         status.artifacts_status[artifact_name] = {
             'generated': False,
             'validated': False,
             'attempts': 0,
-            'errors': []
+            'errors': existing_errors if downstream_error_context else []
         }
         self.save_status(status, dev_mode)
 
@@ -653,6 +690,21 @@ class ModuleAgent:
                 lines.append(f"\nAttempt {i} error:\n{err}")
             return "\n".join(lines)
 
+        def build_downstream_error_section() -> str:
+            """Build a prompt section explaining why this artifact is being re-generated
+            due to a downstream failure (cross-artifact escalation)."""
+            if not downstream_error_context:
+                return ""
+            return (
+                "\n\n⚠️  CROSS-ARTIFACT ESCALATION — READ CAREFULLY ⚠️\n"
+                "This artifact is being RE-GENERATED because a DOWNSTREAM artifact failed "
+                "with an error that was traced back to THIS artifact as the root cause.\n\n"
+                f"{downstream_error_context}\n\n"
+                "You MUST address the issue described above in your new version of this artifact. "
+                "Do NOT simply reproduce the previous version — make targeted changes to fix "
+                "the downstream failure.\n"
+            )
+
         for attempt in range(1, max_loops + 1):
             try:
                 self.logger.print_status(f"Generating {artifact_name} (attempt {attempt}/{max_loops})")
@@ -665,6 +717,9 @@ class ModuleAgent:
                 # Call the agent with appropriate prompt based on artifact type
                 # Build example-data context snippets (used by several artifact types)
                 example_data: List[ExampleDataItem] = status.example_data or []
+
+                # Build cross-artifact escalation context (non-empty only during backtracking)
+                downstream_section = build_downstream_error_section()
 
                 if artifact_name == 'manifest':
                     # Build instructions section if provided
@@ -699,7 +754,7 @@ Planning Data:
 {planning_data_dict}
 
 {error_history if error_history else ""}
-
+{downstream_section}
 This is attempt {attempt} of {max_loops}.
 {example_data_section}
 Generate a complete, valid manifest file in key=value format."""
@@ -727,7 +782,7 @@ Generate a complete, valid manifest file in key=value format."""
                     prompt = f"""Generate the {artifact_name} artifact for the GenePattern module '{tool_info['name']}'.
 
 {error_history if error_history else ""}
-
+{downstream_section}
 This is attempt {attempt} of {max_loops}.{instructions_section}{example_data_section}
 
 Call the {create_method} tool with the following parameters:
@@ -763,7 +818,7 @@ Make sure the generated artifact follows all guidelines, key requirements and cr
                     prompt = f"""Generate the {artifact_name} artifact for the GenePattern module '{tool_info['name']}'.
 
 {error_history if error_history else ""}
-
+{downstream_section}
 This is attempt {attempt} of {max_loops}.{instructions_section}{example_data_section}
 
 Call the {create_method} tool with the following parameters:
@@ -895,7 +950,7 @@ Make sure the generated artifact follows all guidelines, key requirements and cr
 {wrapper_source_section}
 {error_history_section if error_history_section else ""}
 {structured_errors_section}
-
+{downstream_section}
 This is attempt {attempt} of {max_loops}.{instructions_section}{example_data_section}
 
 Call the {create_method} tool with the following parameters:
@@ -917,7 +972,7 @@ Make sure the generated artifact follows all guidelines, key requirements and cr
                     prompt = f"""Generate the {artifact_name} artifact for the GenePattern module '{tool_info['name']}'.
 
 {error_history if error_history else ""}
-
+{downstream_section}
 This is attempt {attempt} of {max_loops}.{instructions_section}
 
 Call the {create_method} tool with the following parameters:
@@ -1050,7 +1105,7 @@ Make sure the generated artifact follows all guidelines, key requirements and cr
                     status.artifacts_status[artifact_name]['validated'] = True
                     self.logger.print_status(f"✅ Successfully generated and validated {artifact_name}")
                     self.save_status(status, dev_mode)
-                    return True
+                    return ArtifactResult(success=True, artifact_name=artifact_name)
                 else:
                     error_report = f"Validation failed: {validation_result.get('error', 'Unknown validation error')}"
                     self.logger.print_status(f"❌ {error_report}")
@@ -1058,7 +1113,14 @@ Make sure the generated artifact follows all guidelines, key requirements and cr
                     self.save_status(status, dev_mode)
 
                     if attempt == max_loops:
-                        return False
+                        # Classify the error to determine root cause
+                        root_cause = classify_error(error_report, artifact_name)
+                        return ArtifactResult(
+                            success=False,
+                            artifact_name=artifact_name,
+                            error_text=error_report,
+                            root_cause=root_cause,
+                        )
 
             except Exception as e:
                 error_report = f"Error generating {artifact_name}: {str(e)}"
@@ -1074,9 +1136,22 @@ Make sure the generated artifact follows all guidelines, key requirements and cr
                 self.save_status(status, dev_mode)
 
                 if attempt == max_loops:
-                    return False
+                    root_cause = classify_error(full_error, artifact_name)
+                    return ArtifactResult(
+                        success=False,
+                        artifact_name=artifact_name,
+                        error_text=full_error,
+                        root_cause=root_cause,
+                    )
 
-        return False
+        # Fallback (should not normally reach here)
+        root_cause = classify_error(error_report, artifact_name)
+        return ArtifactResult(
+            success=False,
+            artifact_name=artifact_name,
+            error_text=error_report,
+            root_cause=root_cause,
+        )
 
     def build_runtime_command(
         self,
@@ -1437,29 +1512,174 @@ Make sure the generated artifact follows all guidelines, key requirements and cr
             self.logger.print_status(f"Traceback: {traceback.format_exc()}", "DEBUG")
             return {'success': False, 'error': error_msg}
 
-    def generate_all_artifacts(self, tool_info: Dict[str, str], planning_data: ModulePlan, module_path: Path, status: ModuleGenerationStatus, skip_artifacts: List[str] = None, max_loops: int = MAX_ARTIFACT_LOOPS, dev_mode: bool = False) -> bool:
-        """Run artifact generation phase using artifact agents"""
+    def generate_all_artifacts(self, tool_info: Dict[str, str], planning_data: ModulePlan, module_path: Path, status: ModuleGenerationStatus, skip_artifacts: List[str] = None, max_loops: int = MAX_ARTIFACT_LOOPS, dev_mode: bool = False, max_escalations: int = MAX_ESCALATIONS) -> bool:
+        """Run artifact generation phase with cross-artifact error escalation.
+
+        Instead of a simple linear pass, this method implements a dependency-aware
+        loop with backtracking.  When a downstream artifact (e.g. ``dockerfile``)
+        fails validation and the error classifier determines the root cause lies
+        in an upstream artifact (e.g. ``wrapper``), the upstream artifact is
+        invalidated and regenerated with the downstream error context injected
+        into its prompt.  The downstream artifact is then retried.
+
+        Escalation is capped at ``MAX_ESCALATIONS`` per artifact pair to prevent
+        infinite loops.
+        """
         self.logger.print_section("Artifact Generation Phase")
         self.logger.print_status("Starting artifact generation")
-        
+
         # Initialize skip list and success flag
-        if skip_artifacts is None: skip_artifacts = []
+        if skip_artifacts is None:
+            skip_artifacts = []
         all_artifacts_successful = True
-        # NOTE: artifact_agents dict order is insertion order (Python 3.7+).
+
+        # Build the ordered list of artifacts to process (insertion order).
         # gpunit intentionally comes before dockerfile so test.yml is available
         # when build_runtime_command reads it during the dockerfile step.
-        for artifact_name, artifact_config in self.artifact_agents.items():
-            if artifact_name in skip_artifacts:  # Check if this artifact should be skipped
-                self.logger.print_status(f"Skipping {artifact_name} (--skip-{artifact_name} specified)")
-                continue
-            
-            self.logger.print_status(f"Generating {artifact_name}...")
-            success = self.artifact_creation_loop(artifact_name, tool_info, planning_data, module_path, status, max_loops, dev_mode)
+        artifact_queue: List[str] = [
+            name for name in self.artifact_agents
+            if name not in skip_artifacts
+        ]
+        # Track per-pair escalation counts to enforce the cap.
+        # Key: (failing_artifact, target_artifact) -> int
+        escalation_pair_counts: Dict[tuple, int] = {}
 
-            if not success:
-                self.logger.print_status(f"❌ Failed to generate {artifact_name} after {max_loops} attempts")
+        # Track downstream error context to inject when re-generating an
+        # upstream artifact due to escalation.  Key: artifact_name -> str
+        pending_downstream_context: Dict[str, str] = {}
+
+        idx = 0
+        while idx < len(artifact_queue):
+            artifact_name = artifact_queue[idx]
+
+            if artifact_name in skip_artifacts:
+                self.logger.print_status(f"Skipping {artifact_name} (--skip-{artifact_name} specified)")
+                idx += 1
+                continue
+
+            # Check if already validated (e.g. from a previous resumed run)
+            existing_status = status.artifacts_status.get(artifact_name, {})
+            if existing_status.get('validated', False):
+                self.logger.print_status(f"✓ {artifact_name} already validated, skipping")
+                idx += 1
+                continue
+
+            self.logger.print_status(f"Generating {artifact_name}...")
+
+            # Pop any pending downstream error context for this artifact
+            downstream_ctx = pending_downstream_context.pop(artifact_name, "")
+
+            result: ArtifactResult = self.artifact_creation_loop(
+                artifact_name, tool_info, planning_data, module_path, status,
+                max_loops, dev_mode,
+                downstream_error_context=downstream_ctx,
+            )
+
+            if result.success:
+                idx += 1
+                continue
+
+            # -----------------------------------------------------------
+            # Artifact failed — attempt cross-artifact escalation
+            # -----------------------------------------------------------
+            root_cause = result.root_cause
+            escalated = False
+
+            if root_cause and should_escalate(root_cause):
+                target = root_cause.target_artifact
+                pair_key = (artifact_name, target)
+                current_count = escalation_pair_counts.get(pair_key, 0)
+
+                # Only escalate if:
+                #  1. We haven't exceeded the per-pair escalation cap
+                #  2. The target artifact is in our queue (not skipped)
+                #  3. The target is upstream of the current artifact
+                can_escalate = (
+                    current_count < max_escalations
+                    and target not in skip_artifacts
+                    and target in self.artifact_agents
+                    and target in ARTIFACT_DEPENDENCIES.get(artifact_name, [])
+                )
+
+                if can_escalate:
+                    escalation_pair_counts[pair_key] = current_count + 1
+
+                    # Record escalation in status for persistence / reporting
+                    status.escalation_counts[pair_key[0]] = (
+                        status.escalation_counts.get(pair_key[0], 0) + 1
+                    )
+                    escalation_event = {
+                        'from_artifact': artifact_name,
+                        'to_artifact': target,
+                        'reason': root_cause.reason,
+                        'error_snippet': result.error_text[:500],
+                    }
+                    status.escalation_log.append(escalation_event)
+                    self.save_status(status, dev_mode)
+
+                    self.logger.print_section("Cross-Artifact Escalation")
+                    self.logger.print_status(
+                        f"🔀 Escalating: {artifact_name} failure → regenerating {target}",
+                        "WARNING",
+                    )
+                    self.logger.print_status(
+                        f"   Reason: {root_cause.reason}",
+                        "WARNING",
+                    )
+                    self.logger.print_status(
+                        f"   Escalation {current_count + 1}/{max_escalations} "
+                        f"for {artifact_name}→{target}",
+                    )
+
+                    # Invalidate the upstream artifact so it gets regenerated
+                    if target in status.artifacts_status:
+                        status.artifacts_status[target]['validated'] = False
+                        status.artifacts_status[target]['generated'] = False
+                    self.save_status(status, dev_mode)
+
+                    # Build context string for the upstream regeneration prompt
+                    pending_downstream_context[target] = (
+                        f"The downstream artifact '{artifact_name}' failed validation "
+                        f"with the following error:\n\n"
+                        f"{result.error_text[:1000]}\n\n"
+                        f"Root-cause analysis: {root_cause.reason}\n\n"
+                        f"You must fix the issue in THIS artifact ({target}) so that "
+                        f"the downstream '{artifact_name}' step can succeed."
+                    )
+
+                    # Insert the upstream artifact back into the queue right
+                    # before the current position so it runs next, followed
+                    # by a retry of the current artifact.
+                    # First, remove any prior occurrence of target in the
+                    # remaining queue to avoid duplicates.
+                    remaining = artifact_queue[idx:]
+                    if target in remaining:
+                        remaining.remove(target)
+                    # Rebuild: everything before idx + [target, current, rest…]
+                    artifact_queue = (
+                        artifact_queue[:idx]
+                        + [target, artifact_name]
+                        + [a for a in remaining if a != artifact_name]
+                    )
+                    # Don't increment idx — the next iteration picks up target
+
+                    escalated = True
+
+                else:
+                    if current_count >= max_escalations:
+                        self.logger.print_status(
+                            f"⚠️  Escalation cap reached for {artifact_name}→{target} "
+                            f"({max_escalations} attempts). Marking {artifact_name} as failed.",
+                            "WARNING",
+                        )
+
+            if not escalated:
+                self.logger.print_status(
+                    f"❌ Failed to generate {artifact_name} after {max_loops} attempts"
+                )
                 all_artifacts_successful = False
-        
+                idx += 1
+
         return all_artifacts_successful
     
     def docker_push(self, planning_data: ModulePlan) -> bool:
@@ -1634,6 +1854,12 @@ Make sure the generated artifact follows all guidelines, key requirements and cr
             print(f"  Total tokens:  {total_tokens:,}")
             print(f"  Estimated cost: ${estimated_cost:.4f}")
 
+        # Print cross-artifact escalation summary (if any occurred)
+        if status.escalation_log:
+            print(f"\nCross-Artifact Escalations: {len(status.escalation_log)}")
+            for evt in status.escalation_log:
+                print(f"  🔀 {evt['from_artifact']} → {evt['to_artifact']}: {evt['reason'][:120]}")
+
         # Overall success status
         all_artifacts_valid = all(
             artifact['generated'] and artifact['validated'] 
@@ -1655,7 +1881,7 @@ Make sure the generated artifact follows all guidelines, key requirements and cr
                 for error in status.error_messages:
                     print(f"  - {error}")
 
-    def run(self, tool_info: Dict[str, str] = None, skip_artifacts: List[str] = None, dev_mode: bool = False, resume_status: ModuleGenerationStatus = None, max_loops: int = MAX_ARTIFACT_LOOPS, no_zip: bool = False, zip_only: bool = False, docker_push: bool = False, example_data: List[ExampleDataItem] = None) -> int:
+    def run(self, tool_info: Dict[str, str] = None, skip_artifacts: List[str] = None, dev_mode: bool = False, resume_status: ModuleGenerationStatus = None, max_loops: int = MAX_ARTIFACT_LOOPS, no_zip: bool = False, zip_only: bool = False, docker_push: bool = False, example_data: List[ExampleDataItem] = None, max_escalations: int = MAX_ESCALATIONS) -> int:
         """Run the complete module generation process"""
 
         # Handle resume mode
@@ -1788,7 +2014,7 @@ Make sure the generated artifact follows all guidelines, key requirements and cr
                     skip_artifacts.append(artifact_name)
                     self.logger.print_status(f"✓ {artifact_name} already completed, skipping")
 
-        artifacts_success = self.generate_all_artifacts(tool_info, status.planning_data, module_path, status, skip_artifacts, max_loops, dev_mode)
+        artifacts_success = self.generate_all_artifacts(tool_info, status.planning_data, module_path, status, skip_artifacts, max_loops, dev_mode, max_escalations)
 
         # Step 1c: Clean up downloaded data/ directory after successful dockerfile step
         dockerfile_validated = status.artifacts_status.get('dockerfile', {}).get('validated', False)
@@ -1908,6 +2134,9 @@ class GenerationScript:
         # Max loops configuration
         parser.add_argument('--max-loops', type=int, metavar='X', default=MAX_ARTIFACT_LOOPS, help=f'Maximum number of generation attempts per artifact (default: {MAX_ARTIFACT_LOOPS})')
 
+        # Max escalations configuration
+        parser.add_argument('--max-escalations', type=int, metavar='N', default=MAX_ESCALATIONS, help=f'Maximum cross-artifact escalation attempts per artifact pair (default: {MAX_ESCALATIONS})')
+
         # Output directory
         parser.add_argument('--output-dir', default=DEFAULT_OUTPUT_DIR, type=str, help=f'Output directory for generated modules (default: {DEFAULT_OUTPUT_DIR})')
 
@@ -2004,6 +2233,7 @@ class GenerationScript:
                     zip_only=self.args.zip_only,
                     docker_push=self.args.docker_push,
                     example_data=resume_example_data,
+                    max_escalations=self.args.max_escalations,
                 )
             else:
                 # Get tool information from args or user input
@@ -2024,6 +2254,7 @@ class GenerationScript:
                     zip_only=self.args.zip_only,
                     docker_push=self.args.docker_push,
                     example_data=example_data,
+                    max_escalations=self.args.max_escalations,
                 )
 
         except KeyboardInterrupt:
