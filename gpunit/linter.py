@@ -31,6 +31,20 @@ from dataclasses import dataclass
 from typing import List, Optional, Tuple
 
 
+_VALID_GPUNIT_TYPES = {'text', 'number', 'file'}
+
+
+def normalize_param_type(raw_type) -> str:
+    """Map any planning-data parameter type to a valid gpunit --types value.
+
+    The gpunit validator only accepts 'text', 'number', or 'file'.
+    GenePattern-specific types like 'choice', 'password', etc. are all
+    functionally text at the test level, so they map to 'text'.
+    """
+    raw = str(raw_type).lower().strip()
+    return raw if raw in _VALID_GPUNIT_TYPES else 'text'
+
+
 @dataclass
 class LintIssue:
     """Represents a validation issue found during GPUnit linting."""

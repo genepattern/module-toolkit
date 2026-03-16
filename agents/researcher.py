@@ -1,6 +1,8 @@
 import os
 import re
 import json
+import time
+import threading
 import requests
 from typing import List, Dict, Any
 from pydantic_ai import Agent, RunContext
@@ -9,6 +11,65 @@ from .models import configured_llm_model
 
 # Load environment variables from .env file
 load_dotenv()
+
+# ---------------------------------------------------------------------------
+# Brave Search API rate-limiter
+# ---------------------------------------------------------------------------
+# The free-tier Brave Search API enforces a hard limit of 1 request per
+# second.  When the LLM issues multiple tool calls concurrently the requests
+# arrive simultaneously and the second (and any further simultaneous) call
+# immediately receives a 429.  We use a module-level lock to serialise all
+# calls and enforce a minimum inter-request gap, plus exponential backoff to
+# recover from any 429s that still slip through.
+
+_brave_lock = threading.Lock()
+_brave_last_call: float = 0.0          # monotonic timestamp of the last request
+_BRAVE_MIN_INTERVAL: float = 1.1       # seconds — slightly over 1 s for safety
+_BRAVE_RETRY_DELAYS = [2.0, 5.0, 10.0] # backoff schedule for 429 retries
+
+
+def _brave_get(url: str, params: dict, headers: dict) -> requests.Response:
+    """Rate-limited, retry-aware GET wrapper for the Brave Search API.
+
+    Serialises concurrent calls via a module-level lock and enforces at least
+    ``_BRAVE_MIN_INTERVAL`` seconds between requests.  On a 429 response it
+    waits according to ``_BRAVE_RETRY_DELAYS`` before retrying; if all
+    retries are exhausted the final 429 response is returned so the caller
+    can raise it as appropriate.
+    """
+    global _brave_last_call
+
+    # We attempt once plus one retry per entry in _BRAVE_RETRY_DELAYS.
+    delays = [0.0] + _BRAVE_RETRY_DELAYS  # delay *before* each attempt
+    for attempt, pre_sleep in enumerate(delays):
+        if pre_sleep:
+            time.sleep(pre_sleep)
+
+        with _brave_lock:
+            # Enforce minimum gap since the last completed request.
+            elapsed = time.monotonic() - _brave_last_call
+            if elapsed < _BRAVE_MIN_INTERVAL:
+                time.sleep(_BRAVE_MIN_INTERVAL - elapsed)
+
+            response = requests.get(url, params=params, headers=headers, timeout=10)
+            _brave_last_call = time.monotonic()
+
+        if response.status_code != 429:
+            return response
+
+        # 429 — log and loop (pre_sleep for the next attempt is applied at
+        # the top of the loop).
+        retry_num = attempt + 1
+        remaining = len(delays) - retry_num - 1
+        if remaining > 0:
+            print(f"⏳ RESEARCH TOOL: web_search got 429, retrying in "
+                  f"{delays[attempt + 1]:.0f}s (attempt {retry_num}/{len(_BRAVE_RETRY_DELAYS)})")
+        else:
+            print(f"❌ RESEARCH TOOL: web_search got 429 on final attempt — giving up")
+
+    # All retries exhausted; return the last 429 response so raise_for_status
+    # in the caller surfaces the proper error.
+    return response
 
 
 system_prompt = """
@@ -91,8 +152,8 @@ def web_search(context: RunContext[str], query: str, num_results: int = 5) -> st
             "freshness": "all"
         }
         
-        # Make the search request
-        response = requests.get(search_url, headers=headers, params=params, timeout=10)
+        # Make the search request (rate-limited, retries on 429)
+        response = _brave_get(search_url, params=params, headers=headers)
         response.raise_for_status()
         
         search_data = response.json()

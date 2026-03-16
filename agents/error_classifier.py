@@ -27,8 +27,46 @@ Rules are evaluated in priority order; the first match wins.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import List, Optional
+from typing import Dict, List, Optional
 import re
+
+
+# ---------------------------------------------------------------------------
+# Utility helpers
+# ---------------------------------------------------------------------------
+
+def _sanitize_error_line(line: str) -> str:
+    """Strip shell metacharacters and quotes from an error line.
+
+    Prevents extracted error text from being copied verbatim into a generated
+    Dockerfile RUN instruction and breaking the Docker BuildKit parser (e.g.
+    an unmatched double-quote causing 'unexpected end of statement').
+    """
+    line = line.strip()
+    for ch in ('"', "'", '`', '$', '\\'):
+        line = line.replace(ch, '')
+    return line
+
+
+# ---------------------------------------------------------------------------
+# Artifact dependency graph
+# ---------------------------------------------------------------------------
+# When a downstream artifact fails, these are the upstream artifacts that
+# *could* be the root cause (in priority order).
+
+ARTIFACT_DEPENDENCIES: Dict[str, List[str]] = {
+    'dockerfile': ['wrapper', 'manifest', 'gpunit'],
+    'gpunit': ['wrapper', 'manifest'],
+    'manifest': ['wrapper'],
+    'paramgroups': ['wrapper', 'manifest'],
+    'documentation': [],
+    'wrapper': [],
+}
+
+
+def get_upstream_dependencies(artifact_name: str) -> List[str]:
+    """Return the list of upstream artifacts that could cause *artifact_name* to fail."""
+    return ARTIFACT_DEPENDENCIES.get(artifact_name, [])
 
 
 @dataclass(frozen=True)
