@@ -77,7 +77,7 @@ class ModuleGenerationStatus:
             usage = result.usage()
             if usage:
                 self.input_tokens += usage.input_tokens or 0
-                self.output_tokens += usage.outputTokens or 0
+                self.output_tokens += usage.output_tokens or 0
         except Exception:
             pass
 
