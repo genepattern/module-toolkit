@@ -145,7 +145,7 @@ class GenerationScript:
 
         # GenePattern upload
         parser.add_argument('--gp-server', type=str, metavar='URL',
-                            default=os.getenv('GP_SERVER', 'https://beta.genepattern.org'),
+                            default=os.getenv('GP_SERVER', 'https://beta.genepattern.org/gp'),
                             help='GenePattern server URL to upload the module zip to (default: https://beta.genepattern.org, or GP_SERVER env var)')
         parser.add_argument('--gp-user', type=str, metavar='USERNAME',
                             default=os.getenv('GP_USER', ''),

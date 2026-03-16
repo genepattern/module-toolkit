@@ -857,7 +857,8 @@ Make sure the generated artifact follows all guidelines, key requirements and cr
 
             try:
                 result = response.json()
-            except Exception:
+            except Exception(e):
+                log.error(f"Failed to parse JSON response from GenePattern installing module: {e}")
                 result = {}
 
             status = result.get('status', '')
