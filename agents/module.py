@@ -1087,9 +1087,7 @@ Make sure the generated artifact follows all guidelines, key requirements and cr
             files_to_zip = []
             for file in module_path.iterdir():
                 if file.is_file():
-                    if file.name.startswith('wrapper') and any(file.name.endswith(ext) for ext in artifact_extensions):
-                        files_to_zip.append(file)
-                    elif any(file.name.endswith(ext) for ext in artifact_extensions) and '_wrapper' in file.name.lower():
+                    if any(file.name.endswith(ext) for ext in artifact_extensions):
                         files_to_zip.append(file)
                     elif file.name in artifact_files:
                         files_to_zip.append(file)
