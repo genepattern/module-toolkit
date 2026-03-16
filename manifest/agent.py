@@ -31,6 +31,7 @@ Key requirements for GenePattern module manifests:
 - Follow GenePattern naming conventions and best practices
 - ALWAYS include job.docker.image from the planning data's docker_image_tag field
 - The colon in docker image tags MUST be escaped with a backslash (e.g., job.docker.image=genepattern/salmon\\:1)
+- Never include non-UTF8/latin1 multi-byte characters in the manifest. 
 
 Manifest Key Guidelines:
 - LSID: Must follow format urn:lsid:authority:namespace:object:revision
