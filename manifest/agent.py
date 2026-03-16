@@ -56,8 +56,8 @@ Parameter Definition Guidelines:
   * p<N>_default_value: Default value if parameter not specified
   * p<N>_value: For choice parameters - semicolon-separated list with format "display=value" or just values
   * p<N>_fileFormat: For FILE parameters - semicolon-separated list of allowed extensions
-  * p<N>_prefix_when_specified: Command-line prefix/flag to add when parameter is used
-  * p<N>_prefix: Alternative command-line prefix
+  * p<N>_prefix_when_specified: Command-line prefix/flag to add when parameter is used. When the prefix is already included in the commandLine template, this property should be left empty to avoid duplication.
+  * p<N>_prefix: Alternative command-line prefix. Include if it always needs the prefix for non-optional parameters if the flag is not already on the command line.  Usually this needs to end with some blanks spaces to separate it from the value.  If prefix_when_specified is used, this should be left empty to avoid duplication.
   * p<N>_flag: Command-line flag
   * p<N>_numValues: Number of values allowed (e.g., "0..1", "1..1", "0+", "1+")
   * p<N>_choiceDir: URL for dynamic choice lists from remote directories
