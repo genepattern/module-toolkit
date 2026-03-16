@@ -76,6 +76,15 @@ Language-Specific Best Practices:
 - R: Use optparse or argparse, proper error handling with tryCatch
 - General: Follow language conventions and idioms for maintainability
 
+CRITICAL GENEPATTERN FLAG NAMING CONVENTION:
+- GenePattern parameter names use dots (e.g., input.file, output.dir, p.thres)
+- Wrapper argparse/optparse flags MUST use the SAME dot-based names
+  * CORRECT: parser.add_argument("--input.file", dest="input_file", ...)
+  * WRONG:   parser.add_argument("--input-file", dest="input_file", ...)
+- This ensures the wrapper's flags match the manifest's commandLine and
+  prefix_when_specified values exactly. Using dashes instead of dots causes
+  a fatal mismatch at runtime.
+
 Error Handling Strategy:
 - Validate all input parameters before tool execution
 - Check file existence and permissions before processing

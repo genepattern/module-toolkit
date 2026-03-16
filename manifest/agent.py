@@ -66,6 +66,18 @@ Parameter Definition Guidelines:
   * Simple format also allowed: p5_value=0\\=no;1\\=yes
 - File parameters should include MODE=IN and appropriate fileFormat restrictions
 - Parameter indices must be sequential starting from 1 (p1, p2, p3, etc.) with no gaps
+
+CRITICAL FLAG NAMING RULE:
+- Parameter names use dots (e.g., input.file, output.dir, p.thres)
+- prefix_when_specified MUST use the SAME dots as the parameter name
+  * CORRECT: p1_name=input.file  →  p1_prefix_when_specified=--input.file
+  * WRONG:   p1_name=input.file  →  p1_prefix_when_specified=--input-file  (dashes instead of dots)
+- commandLine inline flags MUST also use dots matching the parameter names
+  * CORRECT: python wrapper.py --input.file <input.file>
+  * WRONG:   python wrapper.py --input-file <input.file>
+- This is essential because the wrapper script's argparse/optparse definitions
+  use dot-based flag names to match GenePattern parameter names. Using dashes
+  instead of dots causes a fatal mismatch at runtime.
 """
 
 # Create agent without MCP toolsets - validation happens separately via generate-module.py
@@ -744,9 +756,18 @@ def create_manifest(context: RunContext[str]) -> Dict[str, Any]:
                     else:
                         manifest_param['fileFormat'] = str(formats)
 
-                # Add prefix if present
+                # Add prefix if present — auto-correct dashes to dots
+                # to match the parameter name (GenePattern convention).
                 if 'prefix' in param and param['prefix']:
-                    manifest_param['prefix_when_specified'] = param['prefix']
+                    prefix = param['prefix']
+                    pname = param.get('name', '')
+                    if prefix and pname and "." in pname and prefix.startswith("--"):
+                        expected = f"--{pname}"
+                        dashed = f"--{pname.replace('.', '-')}"
+                        if prefix == dashed and prefix != expected:
+                            print(f"  ⚠️  Correcting prefix_when_specified for '{pname}': '{prefix}' → '{expected}'")
+                            prefix = expected
+                    manifest_param['prefix_when_specified'] = prefix
 
                 # Add numValues based on value_count (now in correct manifest format)
                 if 'value_count' in param and param['value_count']:

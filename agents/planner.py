@@ -84,13 +84,16 @@ parameters are marked as optional. This is because:
 
 Command line format rules:
 - Each parameter must appear as a placeholder: <parameter.name>
-- If prefix_only_if_value=False: include "prefix <parameter.name>" (e.g., "--input <input.file>")
+- If prefix_only_if_value=False: include "prefix <parameter.name>" (e.g., "--input.file <input.file>")
 - If prefix_only_if_value=True: include only "<parameter.name>" (GenePattern adds prefix conditionally)
+- CRITICAL: Inline flags in the command line MUST use dots matching the parameter names.
+  * CORRECT: "--input.file <input.file>"
+  * WRONG:   "--input-file <input.file>"  (dashes instead of dots)
 - Use the generate_command_line tool to ensure all parameters are included correctly
 - Use the validate_command_line tool to verify the command line includes all parameters
 
 Example with 3 parameters (input.file, output.format, threads):
-  command_line: "python wrapper.py <input.file> --format <output.format> --threads <threads>"
+  command_line: "python wrapper.py --input.file <input.file> --format <output.format> --threads <threads>"
 
 **Planning Methodology:**
 1. Research the tool thoroughly using available resources
@@ -1078,6 +1081,16 @@ def generate_command_line(context: RunContext[ModulePlan], wrapper_script: str, 
 
         if not name:
             continue
+
+        # Auto-correct prefix: if the parameter name uses dots but the prefix
+        # uses dashes, convert dashes to dots so the flag matches what the
+        # wrapper script will accept.
+        if prefix and "." in name and prefix.startswith("--"):
+            expected_prefix = f"--{name}"
+            dashed_variant = f"--{name.replace('.', '-')}"
+            if prefix == dashed_variant and prefix != expected_prefix:
+                print(f"  ⚠️  Correcting prefix for '{name}': '{prefix}' → '{expected_prefix}'")
+                prefix = expected_prefix
 
         placeholder = f"<{name}>"
 
