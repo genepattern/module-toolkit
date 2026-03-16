@@ -18,7 +18,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from agents.config import DEFAULT_OUTPUT_DIR, MAX_ARTIFACT_LOOPS, MAX_ESCALATIONS
 from agents.error_classifier import (
     classify_error, should_escalate,
-    get_upstream_dependencies, _sanitize_error_line,
+    get_upstream_dependencies, _sanitize_error_line, RootCause,
 )
 from agents.example_data import ExampleDataItem
 from agents.logger import Logger
@@ -900,7 +900,7 @@ Make sure the generated artifact follows all guidelines, key requirements and cr
         """Validate an artifact using its linter. Delegates to agents.validator."""
         return _validate_artifact(file_path, validate_tool, extra_args, self.logger)
 
-    def generate_all_artifacts(self, tool_info: Dict[str, str], planning_data: ModulePlan, module_path: Path, status: ModuleGenerationStatus, skip_artifacts: List[str] = None, max_loops: int = MAX_ARTIFACT_LOOPS, max_escalations: int = MAX_ESCALATIONS) -> bool:
+    def generate_all_artifacts(self, tool_info: Dict[str, str], planning_data: ModulePlan, module_path: Path, status: ModuleGenerationStatus, skip_artifacts: List[str] = None, max_loops: int = MAX_ARTIFACT_LOOPS, max_escalations: int = MAX_ESCALATIONS, no_zip: bool = False, zip_only: bool = False, gp_server: Optional[str] = None, gp_user: Optional[str] = None, gp_password: Optional[str] = None) -> bool:
         """Run artifact generation phase with cross-artifact error escalation."""
         self.logger.print_section("Artifact Generation Phase")
         self.logger.print_status("Starting artifact generation")
@@ -913,6 +913,8 @@ Make sure the generated artifact follows all guidelines, key requirements and cr
             name for name in self.artifact_agents
             if name not in skip_artifacts
         ]
+        if not no_zip and 'install' not in skip_artifacts:
+            artifact_queue.append('install')
         escalation_pair_counts: Dict[tuple, int] = {}
         pending_downstream_context: Dict[str, str] = {}
 
@@ -935,11 +937,16 @@ Make sure the generated artifact follows all guidelines, key requirements and cr
 
             downstream_ctx = pending_downstream_context.pop(artifact_name, "")
 
-            result: ArtifactResult = self.artifact_creation_loop(
-                artifact_name, tool_info, planning_data, module_path, status,
-                max_loops,
-                downstream_error_context=downstream_ctx,
-            )
+            if artifact_name == 'install':
+                result = self._run_install_artifact(
+                    tool_info, module_path, zip_only, gp_server, gp_user, gp_password
+                )
+            else:
+                result = self.artifact_creation_loop(
+                    artifact_name, tool_info, planning_data, module_path, status,
+                    max_loops,
+                    downstream_error_context=downstream_ctx,
+                )
 
             if result.success:
                 idx += 1
@@ -1115,7 +1122,49 @@ Make sure the generated artifact follows all guidelines, key requirements and cr
         except Exception as e:
             self.logger.print_status(f"Failed to create zip archive: {str(e)}", "ERROR")
             self.logger.print_status(f"Traceback: {traceback.format_exc()}", "DEBUG")
-            return False
+            return None
+
+    def _run_install_artifact(
+        self,
+        tool_info: Dict[str, str],
+        module_path: Path,
+        zip_only: bool,
+        gp_server: Optional[str],
+        gp_user: Optional[str],
+        gp_password: Optional[str],
+    ) -> 'ArtifactResult':
+        """Zip artifacts and optionally upload to GenePattern as a pseudo-artifact."""
+        zip_path = self.zip_artifacts(module_path, tool_info['name'], zip_only)
+        if zip_path is None:
+            return ArtifactResult(
+                success=False,
+                artifact_name='install',
+                error_text="Failed to create zip archive.",
+                root_cause=RootCause(
+                    target_artifact='manifest',
+                    reason="Zip creation failed; manifest or paramgroups may be invalid.",
+                    original_artifact='install',
+                ),
+            )
+
+        if not (gp_server and gp_user):
+            # No upload configured — zip success is sufficient
+            return ArtifactResult(success=True, artifact_name='install')
+
+        upload_ok = self.upload_to_genepattern(zip_path, gp_server, gp_user, gp_password)
+        if upload_ok:
+            return ArtifactResult(success=True, artifact_name='install')
+
+        return ArtifactResult(
+            success=False,
+            artifact_name='install',
+            error_text=f"GenePattern upload failed for {zip_path.name}.",
+            root_cause=RootCause(
+                target_artifact='manifest',
+                reason="GenePattern module install failed. The manifest or paramgroups may be invalid.",
+                original_artifact='install',
+            ),
+        )
 
     def print_final_report(self, status: ModuleGenerationStatus):
         """Print comprehensive final report"""
@@ -1317,21 +1366,14 @@ Make sure the generated artifact follows all guidelines, key requirements and cr
         artifacts_success = self.generate_all_artifacts(
             tool_info, status.planning_data, module_path, status,
             skip_artifacts, max_loops, max_escalations,
+            no_zip=no_zip, zip_only=zip_only,
+            gp_server=gp_server, gp_user=gp_user, gp_password=gp_password,
         )
 
         # Clean up downloaded data/ directory after successful dockerfile step
         dockerfile_validated = status.artifacts_status.get('dockerfile', {}).get('validated', False)
         if dockerfile_validated:
             self.cleanup_data_dir(module_path)
-
-        # Phase 4: Zip artifacts (if successful and not disabled)
-        zip_path = None
-        if artifacts_success and not no_zip:
-            zip_path = self.zip_artifacts(module_path, tool_info['name'], zip_only)
-
-        # Phase 4b: Upload to GenePattern (if zip succeeded and credentials are provided)
-        if zip_path and gp_server and gp_user:
-            self.upload_to_genepattern(zip_path, gp_server, gp_user, gp_password)
 
         # Phase 5: Docker push (if enabled)
         if artifacts_success and docker_push:

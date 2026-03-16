@@ -61,6 +61,7 @@ ARTIFACT_DEPENDENCIES: Dict[str, List[str]] = {
     'paramgroups': ['wrapper', 'manifest'],
     'documentation': [],
     'wrapper': [],
+    'install': ['manifest', 'paramgroups'],
 }
 
 
