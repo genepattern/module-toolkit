@@ -829,6 +829,61 @@ Make sure the generated artifact follows all guidelines, key requirements and cr
             root_cause=root_cause,
         )
 
+    def upload_to_genepattern(self, zip_path: Path, gp_server: str, gp_user: str, gp_password: str) -> bool:
+        """
+        Upload a module zip file to a GenePattern server.
+
+        Args:
+            zip_path: Path to the zip file to upload
+            gp_server: GenePattern server URL (e.g., http://host:port/gp)
+            gp_user: GenePattern username
+            gp_password: GenePattern password
+
+        Returns:
+            True if upload was successful, False otherwise
+        """
+        self.logger.print_section("Uploading to GenePattern")
+        endpoint = f"{gp_server.rstrip('/')}/rest/v1/tasks/installModule"
+        self.logger.print_status(f"Uploading {zip_path.name} to {endpoint}")
+
+        try:
+            with open(zip_path, 'rb') as f:
+                response = requests.post(
+                    endpoint,
+                    auth=(gp_user, gp_password),
+                    files={'file': (zip_path.name, f, 'application/zip')},
+                    data={'privacy': '1'},
+                )
+
+            try:
+                result = response.json()
+            except Exception:
+                result = {}
+
+            status = result.get('status', '')
+            message = result.get('message', response.text[:200])
+
+            if status == 'success':
+                self.logger.print_status(f"✅ {message}", "SUCCESS")
+                return True
+            elif status == 'failed':
+                self.logger.print_status(f"Upload failed: {message}", "ERROR")
+                return False
+            elif response.status_code in (200, 201):
+                # No JSON body but HTTP success
+                self.logger.print_status(f"✅ Module uploaded successfully (HTTP {response.status_code})", "SUCCESS")
+                return True
+            else:
+                self.logger.print_status(
+                    f"Upload failed: HTTP {response.status_code} — {message}", "ERROR"
+                )
+                return False
+
+        except Exception as e:
+            self.logger.print_status(f"Upload failed: {str(e)}", "ERROR")
+            self.logger.print_status(f"Traceback: {traceback.format_exc()}", "DEBUG")
+            return False
+
     def build_runtime_command(
         self,
         planning_data: ModulePlan,
@@ -1012,7 +1067,7 @@ Make sure the generated artifact follows all guidelines, key requirements and cr
             self.logger.print_status(f"Traceback: {traceback.format_exc()}", "DEBUG")
             return False
 
-    def zip_artifacts(self, module_path: Path, tool_name: str, zip_only: bool = False) -> bool:
+    def zip_artifacts(self, module_path: Path, tool_name: str, zip_only: bool = False) -> str:
         """Zip all artifact files into {module_name}.zip at the top level."""
         self.logger.print_section("Zipping Artifacts")
         self.logger.print_status("Creating zip archive of artifact files")
@@ -1055,7 +1110,7 @@ Make sure the generated artifact follows all guidelines, key requirements and cr
                     except Exception as e:
                         self.logger.print_status(f"  Failed to delete {file.name}: {str(e)}", "WARNING")
 
-            return True
+            return zip_path
 
         except Exception as e:
             self.logger.print_status(f"Failed to create zip archive: {str(e)}", "ERROR")
@@ -1140,7 +1195,7 @@ Make sure the generated artifact follows all guidelines, key requirements and cr
                 for error in status.error_messages:
                     print(f"  - {error}")
 
-    def run(self, tool_info: Dict[str, str] = None, skip_artifacts: List[str] = None, resume_status: ModuleGenerationStatus = None, max_loops: int = MAX_ARTIFACT_LOOPS, no_zip: bool = False, zip_only: bool = False, docker_push: bool = False, example_data: List[ExampleDataItem] = None, max_escalations: int = MAX_ESCALATIONS) -> int:
+    def run(self, tool_info: Dict[str, str] = None, skip_artifacts: List[str] = None, resume_status: ModuleGenerationStatus = None, max_loops: int = MAX_ARTIFACT_LOOPS, no_zip: bool = False, zip_only: bool = False, docker_push: bool = False, example_data: List[ExampleDataItem] = None, max_escalations: int = MAX_ESCALATIONS, gp_server: str = None, gp_user: str = None, gp_password: str = None) -> int:
         """Run the complete module generation process"""
 
         if resume_status:
@@ -1270,8 +1325,13 @@ Make sure the generated artifact follows all guidelines, key requirements and cr
             self.cleanup_data_dir(module_path)
 
         # Phase 4: Zip artifacts (if successful and not disabled)
+        zip_path = None
         if artifacts_success and not no_zip:
-            self.zip_artifacts(module_path, tool_info['name'], zip_only)
+            zip_path = self.zip_artifacts(module_path, tool_info['name'], zip_only)
+
+        # Phase 4b: Upload to GenePattern (if zip succeeded and credentials are provided)
+        if zip_path and gp_server and gp_user:
+            self.upload_to_genepattern(zip_path, gp_server, gp_user, gp_password)
 
         # Phase 5: Docker push (if enabled)
         if artifacts_success and docker_push:

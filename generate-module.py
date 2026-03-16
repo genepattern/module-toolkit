@@ -6,6 +6,7 @@ A multi-agent system for automatically generating GenePattern modules from bioin
 Uses Pydantic AI to orchestrate research, planning, and artifact generation.
 """
 
+import os
 import sys
 import traceback
 import argparse
@@ -142,6 +143,17 @@ class GenerationScript:
         # Docker push
         parser.add_argument('--docker-push', action='store_true', help='Push the Docker image to Docker Hub after building')
 
+        # GenePattern upload
+        parser.add_argument('--gp-server', type=str, metavar='URL',
+                            default=os.getenv('GP_SERVER', 'https://beta.genepattern.org'),
+                            help='GenePattern server URL to upload the module zip to (default: https://beta.genepattern.org, or GP_SERVER env var)')
+        parser.add_argument('--gp-user', type=str, metavar='USERNAME',
+                            default=os.getenv('GP_USER', ''),
+                            help='GenePattern username (or set GP_USER env var)')
+        parser.add_argument('--gp-password', type=str, metavar='PASSWORD',
+                            default=os.getenv('GP_PASSWORD', ''),
+                            help='GenePattern password (or set GP_PASSWORD env var)')
+
         # Example data
         parser.add_argument('--data', nargs='+', metavar='PATH_OR_URL',
                             help='Example data files (local paths or HTTP/HTTPS URLs). URLs are downloaded '
@@ -223,6 +235,9 @@ class GenerationScript:
                     docker_push=self.args.docker_push,
                     example_data=resume_example_data,
                     max_escalations=self.args.max_escalations,
+                    gp_server=self.args.gp_server,
+                    gp_user=self.args.gp_user,
+                    gp_password=self.args.gp_password,
                 )
             else:
                 # Get tool information from args or user input
@@ -243,6 +258,9 @@ class GenerationScript:
                     docker_push=self.args.docker_push,
                     example_data=example_data,
                     max_escalations=self.args.max_escalations,
+                    gp_server=self.args.gp_server,
+                    gp_user=self.args.gp_user,
+                    gp_password=self.args.gp_password,
                 )
 
         except KeyboardInterrupt:
