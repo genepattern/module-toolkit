@@ -940,7 +940,7 @@ Make sure the generated artifact follows all guidelines, key requirements and cr
 
             if artifact_name == 'install':
                 result = self._run_install_artifact(
-                    tool_info, module_path, zip_only, gp_server, gp_user, gp_password
+                    tool_info, planning_data, module_path, zip_only, gp_server, gp_user, gp_password
                 )
             else:
                 result = self.artifact_creation_loop(
@@ -1075,19 +1075,19 @@ Make sure the generated artifact follows all guidelines, key requirements and cr
             self.logger.print_status(f"Traceback: {traceback.format_exc()}", "DEBUG")
             return False
 
-    def zip_artifacts(self, module_path: Path, tool_name: str, zip_only: bool = False) -> str:
+    def zip_artifacts(self, module_path: Path, tool_name: str, planning_data: 'ModulePlan', zip_only: bool = False) -> str:
         """Zip all artifact files into {module_name}.zip at the top level."""
         self.logger.print_section("Zipping Artifacts")
         self.logger.print_status("Creating zip archive of artifact files")
 
         try:
-            artifact_extensions = ['.py', '.R', '.sh', '.pl', '.java']
             artifact_files = ['manifest', 'paramgroups.json', 'test.yml', 'README.md', 'Dockerfile']
+            wrapper_script = planning_data.wrapper_script if planning_data else None
 
             files_to_zip = []
             for file in module_path.iterdir():
                 if file.is_file():
-                    if any(file.name.endswith(ext) for ext in artifact_extensions):
+                    if wrapper_script and file.name == wrapper_script:
                         files_to_zip.append(file)
                     elif file.name in artifact_files:
                         files_to_zip.append(file)
@@ -1126,6 +1126,7 @@ Make sure the generated artifact follows all guidelines, key requirements and cr
     def _run_install_artifact(
         self,
         tool_info: Dict[str, str],
+        planning_data: 'ModulePlan',
         module_path: Path,
         zip_only: bool,
         gp_server: Optional[str],
@@ -1133,7 +1134,7 @@ Make sure the generated artifact follows all guidelines, key requirements and cr
         gp_password: Optional[str],
     ) -> 'ArtifactResult':
         """Zip artifacts and optionally upload to GenePattern as a pseudo-artifact."""
-        zip_path = self.zip_artifacts(module_path, tool_info['name'], zip_only)
+        zip_path = self.zip_artifacts(module_path, tool_info['name'], planning_data, zip_only)
         if zip_path is None:
             return ArtifactResult(
                 success=False,

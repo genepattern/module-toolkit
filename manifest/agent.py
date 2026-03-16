@@ -31,7 +31,16 @@ Key requirements for GenePattern module manifests:
 - Follow GenePattern naming conventions and best practices
 - ALWAYS include job.docker.image from the planning data's docker_image_tag field
 - The colon in docker image tags MUST be escaped with a backslash (e.g., job.docker.image=genepattern/salmon\\:1)
-- Never include non-UTF8/latin1 multi-byte characters in the manifest. 
+- NEVER include non-ASCII characters (codepoint > 127) anywhere in the manifest file.
+  GenePattern's database does not support unicode characters and the module will fail to
+  install if any are present.  Common offenders to avoid:
+    * Accented letters: use ASCII equivalents (e.g. "Dominguez" not "Domínguez")
+    * Em dash (—) or en dash (–): use "--" or "-" instead
+    * Curly/smart quotes (' ' " "): use straight quotes (' ")
+    * Unicode symbols (≥ ≤ × → ±): use ASCII equivalents (>=, <=, x, ->, +/-)
+    * Ellipsis (…): use three periods (...)
+  This applies to ALL manifest values including descriptions, author names, parameter
+  descriptions, choice labels, and any other free-text fields.
 
 Manifest Key Guidelines:
 - LSID: Must follow format urn:lsid:authority:namespace:object:revision
