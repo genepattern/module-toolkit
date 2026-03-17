@@ -63,7 +63,7 @@ Parameter Definition Guidelines:
   * p<N>_MODE: For FILE parameters only - typically "IN" for input files
   * p<N>_optional: Set to "on" for optional parameters, include but leave empty for required
   * p<N>_default_value: Default value if parameter not specified
-  * p<N>_value: For choice parameters - semicolon-separated list with format "display=value" or just values
+  * p<N>_value: For choice parameters - semicolon-separated list with format "actual_value\\=display_label" or just values
   * p<N>_fileFormat: For FILE parameters - semicolon-separated list of allowed extensions
   * p<N>_prefix_when_specified: Command-line prefix/flag to add when parameter is used. When the prefix is already included in the commandLine template, this property should be left empty to avoid duplication.
   * p<N>_prefix: Alternative command-line prefix. Include if it always needs the prefix for non-optional parameters if the flag is not already on the command line.  Usually this needs to end with some blanks spaces to separate it from the value.  If prefix_when_specified is used, this should be left empty to avoid duplication.
@@ -71,9 +71,10 @@ Parameter Definition Guidelines:
   * p<N>_numValues: Number of values allowed (e.g., "0..1", "1..1", "0+", "1+")
   * p<N>_choiceDir: URL for dynamic choice lists from remote directories
   * p<N>_choiceDirFilter: Filter pattern for choiceDir (e.g., "*.fa;*.fasta")
-- Choice parameter format: Use value property with "display=actual_value" pairs separated by semicolons
+- Choice parameter format: Use value property with "actual_value\\=display_label" pairs separated by semicolons
   * Example: p2_value=Human\\=Human (Gencode v37);Mouse\\=Mouse (Gencode M26)
   * Simple format also allowed: p5_value=0\\=no;1\\=yes
+  * IMPORTANT: The actual value used at runtime comes FIRST, before the \\=, and the human-readable display label comes SECOND, after the \\=.
 - File parameters should include MODE=IN and appropriate fileFormat restrictions
 - Parameter indices must be sequential starting from 1 (p1, p2, p3, etc.) with no gaps
 
@@ -747,11 +748,18 @@ def create_manifest(context: RunContext[str]) -> Dict[str, Any]:
                 if param_type == 'choice' and 'choices' in param and param['choices']:
                     choices = param['choices']
                     if isinstance(choices, list):
-                        # Convert list of choice objects to semicolon-separated values
+                        # Convert list of choice objects to semicolon-separated
+                        # "value\=display" pairs (GenePattern manifest format:
+                        # actual value first, display label second).
                         choice_values = []
                         for choice in choices:
                             if isinstance(choice, dict):
-                                choice_values.append(choice.get('value', str(choice)))
+                                val = choice.get('value', str(choice))
+                                display = choice.get('display', '')
+                                if display and display != val:
+                                    choice_values.append(f"{val}\\={display}")
+                                else:
+                                    choice_values.append(val)
                             else:
                                 choice_values.append(str(choice))
                         manifest_param['value'] = ';'.join(choice_values)

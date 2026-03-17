@@ -953,7 +953,14 @@ def _generate_python_wrapper(template: str, tool_name: str, tool_description: st
         elif param_type == 'Choice':
             choices = param.get('choices', [])
             if choices:
-                arg_line += f", choices={choices}"
+                # Extract just the values from ChoiceOption dicts for argparse
+                choice_vals = []
+                for c in choices:
+                    if isinstance(c, dict):
+                        choice_vals.append(c.get('value', str(c)))
+                    else:
+                        choice_vals.append(str(c))
+                arg_line += f", choices={choice_vals}"
             if default:
                 arg_line += f", default='{default}'"
             arg_line += f", help='{description}'"
