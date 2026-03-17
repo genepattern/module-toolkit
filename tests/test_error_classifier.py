@@ -85,6 +85,99 @@ class TestClassifyError(unittest.TestCase):
         self.assertEqual(rc.target_artifact, "wrapper")
         self.assertTrue(should_escalate(rc))
 
+    # -- Python TypeError: wrong function call signature ---------------------
+
+    def test_unexpected_keyword_argument(self):
+        """TypeError with unexpected keyword argument → wrapper bug."""
+        error = "TypeError: annotate() got an unexpected keyword argument 'n_jobs'"
+        rc = classify_error(error, "dockerfile")
+        self.assertIsNotNone(rc)
+        self.assertEqual(rc.target_artifact, "wrapper")
+        self.assertIn("annotate()", rc.reason)
+        self.assertTrue(should_escalate(rc))
+
+    def test_multiple_values_for_argument(self):
+        """TypeError with multiple values for argument → wrapper bug."""
+        error = "TypeError: foo() got multiple values for argument 'bar'"
+        rc = classify_error(error, "dockerfile")
+        self.assertIsNotNone(rc)
+        self.assertEqual(rc.target_artifact, "wrapper")
+        self.assertIn("foo()", rc.reason)
+        self.assertTrue(should_escalate(rc))
+
+    def test_wrong_number_positional_arguments(self):
+        """TypeError with wrong positional arg count → wrapper bug."""
+        error = "TypeError: process() takes 2 positional arguments but 3 were given"
+        rc = classify_error(error, "dockerfile")
+        self.assertIsNotNone(rc)
+        self.assertEqual(rc.target_artifact, "wrapper")
+        self.assertIn("process()", rc.reason)
+        self.assertTrue(should_escalate(rc))
+
+    def test_missing_required_positional_argument(self):
+        """TypeError with missing required argument → wrapper bug."""
+        error = "TypeError: run() missing 1 required positional argument: 'data'"
+        rc = classify_error(error, "dockerfile")
+        self.assertIsNotNone(rc)
+        self.assertEqual(rc.target_artifact, "wrapper")
+        self.assertIn("run()", rc.reason)
+        self.assertTrue(should_escalate(rc))
+
+    def test_celltypist_annotate_n_jobs_real_error(self):
+        """Real-world error from the celltypist run that triggered this fix."""
+        error = (
+            "INFO: Running CellTypist annotation (mode='best match', majority_voting=False, p_thres=0.5, min_prop=0.0, n_jobs=1)\n"
+            "ERROR: CellTypist annotation failed with an unexpected error: annotate() got an unexpected keyword argument 'n_jobs'\n"
+            "Traceback (most recent call last):\n"
+            "  File \"/module/run_celltypist.py\", line 594, in main\n"
+            "    run_celltypist(args)\n"
+            "  File \"/module/run_celltypist.py\", line 469, in run_celltypist\n"
+            "    predictions = celltypist.annotate(\n"
+            "                  ^^^^^^^^^^^^^^^^^^^^\n"
+            "TypeError: annotate() got an unexpected keyword argument 'n_jobs'\n"
+        )
+        rc = classify_error(error, "dockerfile")
+        self.assertIsNotNone(rc)
+        self.assertEqual(rc.target_artifact, "wrapper")
+        self.assertTrue(should_escalate(rc))
+
+    # =====================================================================
+    # MANIFEST ESCALATION — commandLine / parameter definition errors
+    # These SHOULD escalate to the manifest when failing artifact is
+    # 'dockerfile'.
+    # =====================================================================
+
+    def test_manifest_duplicate_prefix_when_specified(self):
+        """prefix_when_specified duplicated in commandLine → manifest bug."""
+        error = (
+            "Manifest commandLine bug: parameter 'mode' has "
+            "prefix_when_specified='--mode' but the commandLine template "
+            "already contains '--mode <mode>'."
+        )
+        rc = classify_error(error, "dockerfile")
+        self.assertIsNotNone(rc)
+        self.assertEqual(rc.target_artifact, "manifest")
+        self.assertIn("mode", rc.reason)
+        self.assertTrue(should_escalate(rc))
+
+    def test_manifest_duplicate_prefix_in_traceback(self):
+        """Realistic ValueError wrapped in a traceback → manifest."""
+        error = (
+            "Error generating dockerfile: Manifest commandLine bug: "
+            "parameter 'input.file' has prefix_when_specified='--input.file' "
+            "but the commandLine template already contains "
+            "'--input.file <input.file>'. The commandLine should use the "
+            "bare placeholder <input.file> without the prefix.\n\n"
+            "Traceback:\n"
+            "  File \"agents/module.py\", line 742\n"
+            "    raise ValueError(...)\n"
+            "ValueError: Manifest commandLine bug: ...\n"
+        )
+        rc = classify_error(error, "dockerfile")
+        self.assertIsNotNone(rc)
+        self.assertEqual(rc.target_artifact, "manifest")
+        self.assertTrue(should_escalate(rc))
+
     # =====================================================================
     # DOCKERFILE — missing packages / build errors (NO escalation)
     # These should NOT escalate; the Dockerfile itself needs fixing.

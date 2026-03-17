@@ -182,7 +182,62 @@ _RULES: List[tuple] = [
         "the module's command_line template.",
     ),
 
+    # -- Python TypeError: wrong function call signature ---------------------
+    # e.g. "TypeError: annotate() got an unexpected keyword argument 'n_jobs'"
+    (
+        re.compile(
+            r"TypeError:\s*(\S+\(\))\s+got an unexpected keyword argument\s+['\"]?(\S+?)['\"]?",
+            re.IGNORECASE,
+        ),
+        "wrapper",
+        "Wrapper calls {match} with an unsupported keyword argument. "
+        "The wrapper should be regenerated to use the correct API signature "
+        "for the library function it is calling.",
+    ),
+    # e.g. "TypeError: foo() got multiple values for argument 'bar'"
+    (
+        re.compile(
+            r"TypeError:\s*(\S+\(\))\s+got multiple values for argument",
+            re.IGNORECASE,
+        ),
+        "wrapper",
+        "Wrapper calls {match} with duplicate/conflicting arguments. "
+        "The wrapper should be regenerated to fix the function call.",
+    ),
+    # e.g. "TypeError: foo() takes 2 positional arguments but 3 were given"
+    (
+        re.compile(
+            r"TypeError:\s*(\S+\(\))\s+takes\s+\d+\s+positional arguments?\s+but\s+\d+",
+            re.IGNORECASE,
+        ),
+        "wrapper",
+        "Wrapper calls {match} with the wrong number of positional arguments. "
+        "The wrapper should be regenerated to match the correct function signature.",
+    ),
+    # e.g. "TypeError: foo() missing 1 required positional argument: 'bar'"
+    (
+        re.compile(
+            r"TypeError:\s*(\S+\(\))\s+missing\s+\d+\s+required\s+(?:positional|keyword-only)\s+argument",
+            re.IGNORECASE,
+        ),
+        "wrapper",
+        "Wrapper calls {match} without a required argument. "
+        "The wrapper should be regenerated to pass all required arguments.",
+    ),
+
     # -- Manifest / command_line mismatch errors -----------------------------
+    (
+        re.compile(
+            r"Manifest commandLine bug: parameter ['\"]?([^'\"]+)['\"]? has "
+            r"prefix_when_specified",
+            re.IGNORECASE,
+        ),
+        "manifest",
+        "Manifest commandLine duplicates the prefix_when_specified flag for "
+        "parameter '{match}'. The commandLine template should use a bare "
+        "<{match}> placeholder — the prefix is supplied automatically by "
+        "prefix_when_specified. Remove the duplicated flag from commandLine.",
+    ),
     (
         re.compile(
             r"parameter[s]?\s+(?:name[s]?\s+)?(?:not found|missing|unknown|undefined)"

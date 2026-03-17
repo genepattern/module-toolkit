@@ -133,6 +133,63 @@ def _first_choice_value(p: Dict[str, Any]) -> Optional[str]:
     return first_entry
 
 
+def _substitute_placeholder(
+    result_cmd: str,
+    placeholder: str,
+    param: Dict[str, Any],
+    value: Optional[str],
+) -> str:
+    """Replace ``<placeholder>`` in *result_cmd* with the parameter's value.
+
+    If the parameter has a ``prefix_when_specified`` entry in the manifest,
+    the prefix is prepended to the value (e.g. ``--mode 'best match'``).
+
+    When *value* is ``None`` the placeholder is stripped from the command.
+
+    Raises
+    ------
+    ValueError
+        If the ``prefix_when_specified`` text already appears immediately
+        before ``<placeholder>`` in the command template.  This indicates
+        a bug in the manifest: the ``commandLine`` should use bare
+        ``<placeholder>`` tokens and let ``prefix_when_specified`` supply
+        the flag — embedding the flag in *both* places causes duplication.
+    """
+    prefix = (param.get("prefix_when_specified") or "").rstrip()
+    token = f"<{placeholder}>"
+
+    if prefix:
+        # Detect manifest bug: prefix_when_specified is duplicated in the
+        # commandLine template (e.g. "--mode <mode>" when prefix_when_specified
+        # is already "--mode ").
+        dup_pattern = re.compile(
+            re.escape(prefix) + r"\s+" + re.escape(token)
+        )
+        if dup_pattern.search(result_cmd):
+            raise ValueError(
+                f"Manifest commandLine bug: parameter '{placeholder}' has "
+                f"prefix_when_specified='{prefix}' but the commandLine "
+                f"template already contains '{prefix} <{placeholder}>'. "
+                f"The commandLine should use the bare placeholder "
+                f"<{placeholder}> without the prefix — the prefix is "
+                f"supplied automatically by prefix_when_specified."
+            )
+
+        if value is not None:
+            replacement = f"{prefix} {value}"
+        else:
+            replacement = ""
+
+        result_cmd = result_cmd.replace(token, replacement, 1)
+    else:
+        # No prefix_when_specified — plain substitution.
+        result_cmd = result_cmd.replace(
+            token, value if value is not None else "", 1
+        )
+
+    return result_cmd
+
+
 def _default_for_param(p: Dict[str, Any], gpunit_params: Dict[str, Any], *, allow_fallback: bool = True) -> Optional[str]:
     """Return a sensible value for a non-file parameter.
 
@@ -281,7 +338,7 @@ def _build_from_manifest(
                 f"Manifest placeholder <{placeholder}> has no matching parameter — removing",
                 "WARNING",
             )
-            result_cmd = result_cmd.replace(f"<{placeholder}>", "", 1)
+            result_cmd = _substitute_placeholder(result_cmd, placeholder, {}, None)
             continue
 
         is_file = _is_file_param(param)
@@ -320,11 +377,9 @@ def _build_from_manifest(
                     )
                     return None
                 else:
-                    # Optional file param with no data — remove the placeholder.
-                    # In GenePattern manifests, prefix_when_specified is NOT
-                    # embedded in the commandLine template; it is applied at
-                    # runtime by the server.  So we only strip <placeholder>.
-                    result_cmd = result_cmd.replace(f"<{placeholder}>", "", 1)
+                    # Optional file param with no data — remove placeholder
+                    # and any prefix_when_specified that accompanies it.
+                    result_cmd = _substitute_placeholder(result_cmd, placeholder, param, None)
                     continue
 
             container_path = f"/data/{item.filename}"
@@ -332,7 +387,7 @@ def _build_from_manifest(
             if volume_entry not in volume_list:
                 volume_list.append(volume_entry)
             logger.print_status(f"FILE param '{placeholder}' -> {container_path} (volume: {volume_entry})")
-            result_cmd = result_cmd.replace(f"<{placeholder}>", _shell_quote(container_path), 1)
+            result_cmd = _substitute_placeholder(result_cmd, placeholder, param, _shell_quote(container_path))
 
         else:
             # Non-file parameter
@@ -341,11 +396,10 @@ def _build_from_manifest(
                 val = _default_for_param(param, gpunit_params, allow_fallback=False)
                 if val is not None:
                     logger.print_status(f"Optional param '{placeholder}' -> {val!r}")
-                    result_cmd = result_cmd.replace(f"<{placeholder}>", _shell_quote(val), 1)
+                    result_cmd = _substitute_placeholder(result_cmd, placeholder, param, _shell_quote(val))
                 else:
                     logger.print_status(f"Optional param '{placeholder}' -> (stripped, no value)")
-                    # No value available — remove the placeholder.
-                    result_cmd = result_cmd.replace(f"<{placeholder}>", "", 1)
+                    result_cmd = _substitute_placeholder(result_cmd, placeholder, param, None)
             else:
                 # Required non-file: must have a value
                 val = _default_for_param(param, gpunit_params)
@@ -356,7 +410,7 @@ def _build_from_manifest(
                     )
                     return None
                 logger.print_status(f"Required param '{placeholder}' -> {val!r}")
-                result_cmd = result_cmd.replace(f"<{placeholder}>", _shell_quote(val), 1)
+                result_cmd = _substitute_placeholder(result_cmd, placeholder, param, _shell_quote(val))
 
     # Clean up any double spaces left by removed optional params
     result_cmd = re.sub(r"  +", " ", result_cmd).strip()

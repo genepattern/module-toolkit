@@ -13,8 +13,10 @@ This test catches three classes of mismatch:
 1. ``prefix_when_specified`` uses dashes where the parameter name has dots.
 2. Inline flags in ``commandLine`` use dashes where the parameter name
    has dots.
-3. ``prefix_when_specified`` and the inline flag in ``commandLine`` are
-   inconsistent with each other.
+3. ``prefix_when_specified`` and an inline flag in ``commandLine`` are both
+   present for the same parameter — this is a bug because GenePattern
+   applies ``prefix_when_specified`` automatically at runtime, so an
+   inline flag in ``commandLine`` causes the flag to appear twice.
 """
 from __future__ import annotations
 
@@ -106,7 +108,33 @@ def run_test(lines: List[str]) -> List[LintIssue]:
 
         param_name = name_val[0]
 
-        # Only check params whose names actually contain dots
+        # --- Check 3: prefix_when_specified duplicated as inline flag ------
+        # GenePattern applies prefix_when_specified at runtime.  If the
+        # commandLine template also embeds a flag before <param_name>, the
+        # flag will appear twice when the server substitutes the parameter.
+        # The commandLine should use bare <param_name> placeholders and
+        # let prefix_when_specified supply the flag.
+        if command_line and prefix_val is not None:
+            prefix = prefix_val[0].strip()
+            if prefix:
+                inline_flag = _extract_inline_flag(command_line, param_name)
+                if inline_flag is not None:
+                    cmd_line_no = kv.get("commandLine", ("", 0, ""))[1]
+                    cmd_line_text = kv.get("commandLine", ("", 0, ""))[2]
+                    issues.append(LintIssue(
+                        "ERROR",
+                        f"Parameter p{param_num} '{param_name}': "
+                        f"prefix_when_specified is '{prefix}' but the "
+                        f"commandLine also has inline flag '{inline_flag}' "
+                        f"before <{param_name}>. This will produce a "
+                        f"duplicated flag at runtime. Remove the inline "
+                        f"flag from commandLine and use only the bare "
+                        f"placeholder <{param_name}>.",
+                        cmd_line_no,
+                        cmd_line_text,
+                    ))
+
+        # Checks 1 and 2 only apply to params whose names contain dots
         if "." not in param_name:
             continue
 
