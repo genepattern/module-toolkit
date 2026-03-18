@@ -191,7 +191,12 @@ def run_modular_tests(manifest_path: str) -> Tuple[bool, List[LintIssue]]:
             
             # Run the test if it has the required function
             if hasattr(test_module, "run_test"):
-                test_issues = test_module.run_test(lines)
+                import inspect
+                sig = inspect.signature(test_module.run_test)
+                if len(sig.parameters) >= 2:
+                    test_issues = test_module.run_test(lines, manifest_path)
+                else:
+                    test_issues = test_module.run_test(lines)
                 all_issues.extend(test_issues)
                 tests_run += 1
                 
