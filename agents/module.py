@@ -252,10 +252,12 @@ class ModuleAgent:
                 lines = ["", "            Example Data Provided (for reference only):"]
                 for item in example_data:
                     kind = "URL" if item.is_url else "local file"
-                    lines.append(f"            - {item.filename} ({item.extension}) — {kind}")
+                    lines.append(f"            - {item.filename} ({item.extension}) — {kind}{item.hint_label}")
                 lines.append("            These are examples of data the user already has. Use them to understand typical")
                 lines.append("            input formats, but do NOT restrict your research to only these formats. Document")
                 lines.append("            ALL formats the tool supports so the module remains broadly useful.")
+                lines.append("            Where a [hint: ...] is shown, it describes the semantic role of that file")
+                lines.append("            (e.g. 'tumor_sample', 'reference', 'germline_resource').")
                 lines.append("")
                 example_data_section = "\n".join(lines)
 
@@ -313,11 +315,14 @@ class ModuleAgent:
                 lines = ["", "            Example Data Provided (for reference only):"]
                 for item in example_data:
                     kind = "URL" if item.is_url else "local file"
-                    lines.append(f"            - {item.filename} ({item.extension}) — {kind}")
+                    lines.append(f"            - {item.filename} ({item.extension}) — {kind}{item.hint_label}")
                 lines.append("            The user has this format available, so the module MUST accept it. However, do")
                 lines.append("            NOT restrict the file_formats field to only this extension — include every")
                 lines.append("            format the tool legitimately supports. The example data tells you what to")
                 lines.append("            include, not what to exclude.")
+                lines.append("            Where a [hint: ...] is shown, use it to assign the file to the correct")
+                lines.append("            parameter (e.g. a file hinted 'tumor_sample' maps to the tumor BAM input,")
+                lines.append("            'germline_resource' maps to the germline VCF parameter, etc.).")
                 lines.append("")
                 example_data_section = "\n".join(lines)
 
@@ -439,6 +444,11 @@ class ModuleAgent:
                 status.artifacts_status[artifact_name]['attempts'] = attempt
                 self.save_status(status)
 
+                # Serialize planning_data here for use in prompt-building below.
+                # NOTE: deps_context re-serializes immediately before the agent
+                # call so that any correction made by _sync_wrapper_script (which
+                # runs in generate_all_artifacts before this loop is entered) is
+                # always reflected in what the LLM tool receives.
                 planning_data_dict = planning_data.model_dump(mode='json')
                 example_data: List[ExampleDataItem] = status.example_data or []
                 downstream_section = build_downstream_error_section()
@@ -453,10 +463,13 @@ class ModuleAgent:
                         lines = ["\nExample Data Provided (for cross-check only):"]
                         for item in example_data:
                             kind = "URL" if item.is_url else "local file"
-                            lines.append(f"- {item.filename} ({item.extension}) — {kind}")
+                            lines.append(f"- {item.filename} ({item.extension}) — {kind}{item.hint_label}")
                         lines.append("Confirm that the fileFormat field on the relevant input parameter(s) includes")
                         lines.append("this extension. Do NOT replace the full format list with only this extension —")
                         lines.append("all formats the tool legitimately supports must remain present.")
+                        lines.append("Where a [hint: ...] is shown, use it to match each file to the correct")
+                        lines.append("parameter (e.g. 'tumor_sample' → tumor BAM parameter, 'reference' → reference")
+                        lines.append("FASTA parameter, 'germline_resource' → germline VCF parameter).")
                         example_data_section = "\n".join(lines)
 
                     error_history = build_error_history()
@@ -489,8 +502,11 @@ Generate a complete, valid manifest file in key=value format."""
                         if local_items:
                             lines = ["\nExample Data for Test Parameters:"]
                             for item in local_items:
-                                lines.append(f"- {item.local_path}  (use as the value for the matching file input parameter)")
+                                hint_suffix = f"  # {item.hint}" if item.hint else ""
+                                lines.append(f"- {item.local_path}  (use as the value for the matching file input parameter){hint_suffix}")
                             lines.append("Use these exact local paths as parameter values in the test YAML.")
+                            lines.append("Where a comment shows a hint (e.g. '# tumor_sample'), use it to identify")
+                            lines.append("which parameter this file corresponds to.")
                             lines.append("For all other parameters (numeric, text, choice), use sensible default or")
                             lines.append("representative values. Do not invent placeholder strings like '<path_to_input>'.")
                             example_data_section = "\n".join(lines)
@@ -522,11 +538,13 @@ Make sure the generated artifact follows all guidelines, key requirements and cr
                         lines = ["\nExample Data Provided:"]
                         for item in example_data:
                             kind = "URL" if item.is_url else "local file"
-                            lines.append(f"- {item.filename} ({item.extension}) — {kind}")
+                            lines.append(f"- {item.filename} ({item.extension}) — {kind}{item.hint_label}")
                         lines.append("These files represent distinct input roles. When grouping parameters, keep")
                         lines.append("parameters that correspond to related input files in the same logical group")
                         lines.append("(e.g., place a counts matrix and metadata file parameters together in an")
                         lines.append("'Input Files' group rather than splitting them across unrelated groups).")
+                        lines.append("Where a [hint: ...] is shown, use it to understand the semantic role of each")
+                        lines.append("file when deciding how to group its corresponding parameter.")
                         example_data_section = "\n".join(lines)
 
                     error_history = build_error_history()
@@ -553,7 +571,8 @@ Make sure the generated artifact follows all guidelines, key requirements and cr
                     if local_items:
                         lines = ["\nExample Data for Runtime Validation:"]
                         for item in local_items:
-                            lines.append(f"- {item.local_path} (will be bind-mounted into the container as /data/{item.filename})")
+                            hint_suffix = f"  # role: {item.hint}" if item.hint else ""
+                            lines.append(f"- {item.local_path} (will be bind-mounted into the container as /data/{item.filename}){hint_suffix}")
                         lines.append("After the image is built, a runtime command will be run using this file")
                         lines.append("bind-mounted into the container — no network access or download utilities")
                         lines.append("(wget, curl) are needed inside the image for this test. Ensure all dependencies")
@@ -562,7 +581,7 @@ Make sure the generated artifact follows all guidelines, key requirements and cr
                         example_data_section = "\n".join(lines)
 
                     wrapper_source_section = ""
-                    _wrapper_script = planning_data_dict.get('wrapper_script') or 'wrapper.py'
+                    _wrapper_script = planning_data.wrapper_script or 'wrapper.py'
                     _wrapper_path = module_path / _wrapper_script
                     if _wrapper_path.exists():
                         try:
@@ -591,6 +610,10 @@ Make sure the generated artifact follows all guidelines, key requirements and cr
                             'file does not exist',
                             'COPY failed:',
                             'failed to solve:',
+                            # GATK / Java runtime errors
+                            'USER ERROR', 'A USER ERROR has occurred',
+                            'Exception in thread', 'java.lang.', 'java.io.',
+                            'htsjdk.', 'org.broadinstitute.',
                         ]
                         extracted = []
                         for ln in raw.splitlines():
@@ -630,6 +653,10 @@ Make sure the generated artifact follows all guidelines, key requirements and cr
                             'file does not exist',
                             'COPY failed:',
                             'failed to solve:',
+                            # GATK / Java runtime errors
+                            'USER ERROR', 'A USER ERROR has occurred',
+                            'Exception in thread', 'java.lang.', 'java.io.',
+                            'htsjdk.', 'org.broadinstitute.',
                         ]
                         extracted = []
                         for line in error_report.splitlines():
@@ -731,7 +758,6 @@ This is attempt {attempt} of {max_loops}.{instructions_section}{example_data_sec
 
 Call the {create_method} tool with the following parameters:
 - wrapper_source: Pass the FULL wrapper script source shown above in the "Wrapper Script" section (pass an empty string if no wrapper source was shown).
-- planning_data: Pass the planning data as a dictionary with keys: wrapper_script, parameters, input_file_formats, cpu_cores, memory, docker_image_tag.
 - error_report: {repr(error_report)}
 - attempt: {attempt}.
 The tool will parse the wrapper's import statements programmatically to determine the correct pip/R packages to install.
@@ -802,7 +828,7 @@ Make sure the generated artifact follows all guidelines, key requirements and cr
 
                 deps_context = {
                     'tool_info': tool_info,
-                    'planning_data': planning_data_dict,
+                    'planning_data': planning_data.model_dump(mode='json'),
                     'error_report': error_report,
                     'attempt': attempt
                 }
@@ -1587,6 +1613,7 @@ Make sure the generated artifact follows all guidelines, key requirements and cr
             if example_data is not None:
                 status.example_data = example_data
                 self.logger.print_status(f"Overriding example_data with {len(example_data)} item(s) from --data")
+                self.save_status(status)  # persist hints immediately so they survive any mid-run crash
 
             if not tool_info:
                 language = 'unknown'

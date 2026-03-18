@@ -278,23 +278,51 @@ def run_test(dockerfile_path: str, shared_context: dict) -> List[LintIssue]:
     try:
         res = run(cmd)
         
+        # Always print the full container output so the user can follow along.
+        combined_output = (res.stdout + "\n" + res.stderr).strip()
+        if combined_output:
+            print("\n--- Container output ---")
+            print(combined_output)
+            print("--- End container output ---\n")
+
         if res.returncode != 0:
+
+            # Extract the most actionable lines using a broad set of error keywords,
+            # including GATK/Java-specific patterns the generic filter would miss.
+            error_keywords = [
+                # Generic
+                'error', 'failed', 'exception', 'traceback', 'fatal',
+                # Java / GATK
+                'user error', 'a user error has occurred', 'exception in thread',
+                'java.lang.', 'java.io.', 'htsjdk.', 'org.broadinstitute.',
+                # Python
+                'modulenotfounderror', 'importerror', 'syntaxerror',
+                # Shell / OS
+                'command not found', 'no such file', 'permission denied',
+            ]
+            key_lines = []
+            for line in combined_output.splitlines():
+                if any(kw in line.lower() for kw in error_keywords):
+                    stripped = line.strip()
+                    if stripped and stripped not in key_lines:
+                        key_lines.append(stripped)
+
+            # Always include the last 30 lines of combined output so the LLM
+            # has full context even when errors don't match the keyword list.
+            tail_lines = combined_output.splitlines()[-30:]
+
+            parts = []
+            if key_lines:
+                parts.append("KEY ERRORS:\n" + "\n".join(f"  {l}" for l in key_lines[:20]))
+            parts.append("LAST 30 LINES OF OUTPUT:\n" + "\n".join(tail_lines))
+            output_summary = "\n\n".join(parts) if parts else "(no output captured)"
+
             issues.append(LintIssue(
                 "ERROR",
                 f"Container runtime failed for command: {command}",
-                f"Run command: {res.cmd}"
+                f"Run command: {res.cmd}\n\n{output_summary}"
             ))
-            
-            # Parse and add specific runtime errors
-            if res.stderr.strip():
-                error_lines = res.stderr.strip().split('\\n')
-                for line in error_lines:
-                    if 'error' in line.lower() or 'failed' in line.lower():
-                        issues.append(LintIssue(
-                            "ERROR",
-                            f"Runtime error: {line.strip()}"
-                        ))
-                        
+
             # If container can't find shell, suggest alternative
             if 'executable file not found' in res.stderr.lower() and 'sh' in res.stderr:
                 issues.append(LintIssue(
@@ -302,15 +330,7 @@ def run_test(dockerfile_path: str, shared_context: dict) -> List[LintIssue]:
                     "Container does not have POSIX shell (sh)",
                     "Image may be based on scratch or distroless - cannot run shell commands"
                 ))
-            
-            # If no specific errors found, add output sample
-            if len(issues) == 1:  # Only the main error so far
-                full_output = res.stderr.strip() or res.stdout.strip()
-                if full_output:
-                    issues.append(LintIssue(
-                        "ERROR",
-                        f"Runtime output: {full_output[:300]}..." if len(full_output) > 300 else full_output
-                    ))
+
         else:
             # Runtime test succeeded
             # Log successful output

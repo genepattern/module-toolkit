@@ -18,20 +18,103 @@ import shlex
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+from pydantic import BaseModel, Field
+from pydantic_ai import Agent
+
 from agents.logger import Logger
+from agents.models import configured_llm_model
 from wrapper.parser import parse_wrapper_flags
 
 
 def _shell_quote(value: str) -> str:
-    """Shell-quote a value if it contains spaces or shell metacharacters.
-
-    Plain single-token values are returned unchanged so the resulting command
-    string stays readable.  Values with spaces (e.g. ``best match``) are
-    returned as ``'best match'`` so that ``sh -lc`` treats them as one token.
-    """
+    """Shell-quote a value if it contains spaces or shell metacharacters."""
     if " " in value or any(ch in value for ch in ("'", '"', ";", "&", "|", "(", ")", "$", "`", "\\", "\n")):
         return shlex.quote(value)
     return value
+
+
+# ---------------------------------------------------------------------------
+# LLM-based hint → parameter mapping
+# ---------------------------------------------------------------------------
+
+class HintMapping(BaseModel):
+    """Structured output from the hint-mapping LLM call."""
+    mapping: Dict[str, str] = Field(
+        description=(
+            "Dictionary mapping each FILE parameter name to the filename of the "
+            "example data item that should be used for it. Only include parameters "
+            "for which a confident match exists. Parameter names are the keys "
+            "(e.g. 'input.tumor.bam'), filenames are the values (e.g. 'HG008T.sorted.bam'). "
+            "Omit any parameter for which no suitable file is available."
+        )
+    )
+
+
+_hint_mapping_agent = Agent(
+    configured_llm_model(),
+    output_type=HintMapping,
+    system_prompt=(
+        "You are a bioinformatics expert. Your sole task is to match example data files "
+        "to the FILE parameters of a bioinformatics module, using the semantic hints "
+        "attached to each file and your knowledge of the tool domain. "
+        "Return a JSON object with a 'mapping' field: a dict from parameter name to filename. "
+        "Only include parameters where you are confident about the match. "
+        "Do not invent filenames — only use filenames from the provided list."
+    ),
+)
+
+
+def _llm_hint_mapping(
+    hinted_items: list,
+    file_params: Dict[str, Dict[str, Any]],
+    logger: Logger,
+) -> Dict[str, str]:
+    """Use an LLM to map hinted example-data items to FILE parameter names.
+
+    Args:
+        hinted_items: ExampleDataItem objects that have a non-None hint.
+        file_params:  Dict of {param_name: param_metadata} for FILE-type parameters only.
+        logger:       Logger for status messages.
+
+    Returns:
+        Dict mapping parameter name → filename (e.g. {'input.tumor.bam': 'HG008T.sorted.bam'}).
+        Returns an empty dict on any failure so callers fall back gracefully.
+    """
+    if not hinted_items or not file_params:
+        return {}
+
+    # Build the prompt text
+    files_lines = "\n".join(
+        f"  - {item.filename} (extension: {item.extension}, hint: {item.hint})"
+        for item in hinted_items
+    )
+    params_lines = "\n".join(
+        f"  - {name} (accepted formats: {meta.get('fileFormat', 'any')})"
+        for name, meta in file_params.items()
+    )
+    prompt = (
+        f"Available example data files:\n{files_lines}\n\n"
+        f"FILE parameters to fill:\n{params_lines}\n\n"
+        "Match each file to the parameter it belongs to, using the hints and your "
+        "domain knowledge. Return only confident matches."
+    )
+
+    try:
+        result = _hint_mapping_agent.run_sync(prompt)
+        mapping = result.output.mapping
+        logger.print_status(
+            f"LLM hint mapping produced {len(mapping)} assignment(s): {mapping}"
+        )
+        # Validate: only keep entries whose filename actually exists in hinted_items
+        valid_filenames = {item.filename for item in hinted_items}
+        mapping = {k: v for k, v in mapping.items() if v in valid_filenames}
+        return mapping
+    except Exception as exc:
+        logger.print_status(
+            f"LLM hint mapping failed ({exc}) — falling back to extension matching",
+            "WARNING",
+        )
+        return {}
 
 
 # ---------------------------------------------------------------------------
@@ -304,15 +387,40 @@ def _build_from_manifest(
     logger.print_status(f"Parsed manifest commandLine: {command_line[:120]}...")
     logger.print_status(f"Parsed {len(manifest_params)} parameters from manifest: {list(manifest_params.keys())}")
 
-    # Build extension -> item mapping for file matching (first match wins)
+    # Build extension -> item mapping for file matching (first match wins).
+    # Also keep a list of hinted items for the LLM mapping call.
     ext_to_item: Dict[str, Any] = {}
+    hinted_items: list = []   # items that carry a semantic hint
     positional_files: list = []
+    filename_to_item: Dict[str, Any] = {}
     for item in (example_data or []):
         if item.has_local:
             if item.extension and item.extension not in ext_to_item:
                 ext_to_item[item.extension] = item
+            if getattr(item, 'hint', None):
+                hinted_items.append(item)
             positional_files.append(item)
-    logger.print_status(f"Example data: {len(positional_files)} file(s) with local paths, ext_to_item keys: {list(ext_to_item.keys())}")
+            filename_to_item[item.filename] = item
+    hint_summary = [(i.filename, i.hint) for i in hinted_items]
+    logger.print_status(
+        f"Example data: {len(positional_files)} file(s) with local paths, "
+        f"ext_to_item keys: {list(ext_to_item.keys())}"
+        + (f", hinted items: {hint_summary}" if hint_summary else "")
+    )
+
+    # ── Strategy A: LLM-based hint mapping ───────────────────────────────────
+    # Call the LLM once, before the placeholder loop, to map hinted items to
+    # parameter names.  The result is a plain dict used as a lookup inside the
+    # loop.  If there are no hinted items, or the call fails, the dict is empty
+    # and the loop falls through to extension matching as before.
+    file_params_for_llm = {
+        name: meta
+        for name, meta in manifest_params.items()
+        if _is_file_param(meta)
+    }
+    llm_mapping: Dict[str, str] = {}   # param_name → filename
+    if hinted_items:
+        llm_mapping = _llm_hint_mapping(hinted_items, file_params_for_llm, logger)
 
     volume_list: List[str] = []
     positional_file_idx = 0
@@ -346,11 +454,28 @@ def _build_from_manifest(
         logger.print_status(f"Placeholder <{placeholder}>: TYPE={param.get('TYPE')}, is_file={is_file}, required={is_req}, default_value={param.get('default_value')!r}")
 
         if is_file:
-            # Match example data to this file parameter by extension
+            # ── Strategy A: LLM hint mapping ────────────────────────────────
+            # Use the pre-computed LLM mapping (param_name → filename).
             item = None
+            if placeholder in llm_mapping:
+                matched_filename = llm_mapping[placeholder]
+                item = filename_to_item.get(matched_filename)
+                if item:
+                    logger.print_status(
+                        f"FILE param '{placeholder}' matched by LLM hint mapping "
+                        f"→ {matched_filename}"
+                    )
+                else:
+                    logger.print_status(
+                        f"LLM mapping returned unknown filename '{matched_filename}' "
+                        f"for '{placeholder}' — ignoring",
+                        "WARNING",
+                    )
+
+            # ── Strategy B: extension matching ──────────────────────────────
             file_formats = param.get("fileFormat", "")
             has_format_restriction = bool(file_formats.strip())
-            if has_format_restriction:
+            if item is None and has_format_restriction:
                 for fmt in file_formats.split(";"):
                     fmt = fmt.strip()
                     if not fmt:
