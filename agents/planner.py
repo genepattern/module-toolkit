@@ -40,6 +40,11 @@ in your planning. These instructions may specify:
 
 Always carefully review and incorporate any user-provided instructions into your plan.
 
+**IMPORTANT: User-Provided Base Docker Image**
+When the planning prompt includes a "Base Docker Image" section, you MUST use that value VERBATIM
+as the `docker_image_tag` field in the ModulePlan. Do NOT replace it with a normalised
+`genepattern/<name>:<version>` tag. The user has explicitly told you which image to use.
+
 **GenePattern Parameter Types:**
 - Text: String values (single or multiple)
 - Integer: Whole numbers with optional ranges
