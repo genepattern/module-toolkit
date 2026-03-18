@@ -55,6 +55,11 @@ USING THE create_dockerfile TOOL:
   attempt to pass a planning_data argument.
 - Passing the wrapper source allows the tool to produce a Dockerfile that reflects the
   wrapper's ACTUAL dependencies rather than guessing.
+- If a specific base Docker image is known (e.g. a tool ships its own official image),
+  set one of these keys in planning_data so the tool uses it directly instead of guessing:
+    * docker_image_tag   — highest priority (e.g. "broadinstitute/gatk:4.5.0.0")
+    * base_image         — second priority  (e.g. "python:3.11-slim")
+    * base_docker_image  — fallback hint    (e.g. "ubuntu:22.04")
 
 Guidelines:
 - Minimize image size while ensuring all dependencies are available
@@ -434,11 +439,17 @@ def create_dockerfile(
     planning_data, error_report, attempt).
 
     Args:
-        context: RunContext with dependencies: tool_info, planning_data,
-                 error_report, attempt.
-        wrapper_source: Full source code of the wrapper script (wrapper.py /
-                        wrapper.R / etc.). Pass an empty string when the
-                        wrapper has not been generated yet.
+        context: RunContext with dependencies containing tool_info, error_report, and attempt.
+        wrapper_source: Full source code of the wrapper script (wrapper.py / wrapper.R / etc.).
+                        Pass an empty string when the wrapper has not been generated yet.
+        planning_data: Dictionary with module plan fields (wrapper_script, parameters,
+                       input_file_formats, cpu_cores, memory, docker_image_tag, …).
+                       When omitted the tool falls back to context.deps['planning_data'].
+                       To pin the base Docker image, set one of these keys (checked in order):
+                         - ``docker_image_tag``  e.g. "broadinstitute/gatk:4.5.0.0"
+                         - ``base_image``        e.g. "python:3.11-slim"
+                         - ``base_docker_image`` e.g. "ubuntu:22.04"
+                       If none are set, the base image is inferred from the wrapper language.
 
     Returns:
         Complete Dockerfile content ready for validation
@@ -572,8 +583,24 @@ def create_dockerfile(
         else:
             print(f"✓ Using wrapper_script from planning_data for COPY command: {wrapper_filename}")
 
-        # Determine base image based on language
-        if language == 'python' or wrapper_language == 'python':
+        # Determine base image - prefer explicit hint from planning_data, fall back to language heuristic
+        base_image_hint = (
+            planning_data.get('docker_image_tag') or
+            planning_data.get('base_image') or
+            planning_data.get('base_docker_image')
+        ) if planning_data else None
+
+        if base_image_hint:
+            base_image = base_image_hint
+            print(f"✓ Using base image hint from planning_data: {base_image}")
+            # Still need to pick an appropriate install_cmd for the language
+            if language == 'python' or wrapper_language == 'python':
+                install_cmd = 'pip install --no-cache-dir'
+            elif language == 'r' or wrapper_language == 'r':
+                install_cmd = 'R -e'
+            else:
+                install_cmd = 'apt-get install -y'
+        elif language == 'python' or wrapper_language == 'python':
             base_image = 'python:3.11-slim'
             install_cmd = 'pip install --no-cache-dir'
         elif language == 'r' or wrapper_language == 'r':

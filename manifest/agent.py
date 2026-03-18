@@ -47,6 +47,7 @@ Manifest Key Guidelines:
 - name: Clear, descriptive module name (use dots/underscores as needed)
 - description: Concise explanation of module purpose and functionality
 - commandLine: Template with parameter placeholders like <input.file>.  The command line should have placeholders for every parameter defined in the manifest.
+- CRITICAL: The wrapper script in the commandLine MUST always be prefixed with <libdir> (e.g., python <libdir>wrapper.py ...) so GenePattern can locate it. NEVER use a bare script name like "python wrapper.py" without the <libdir> prefix.
 - version: Semantic version (e.g., 1.0.0)
 - author: Module author information
 - categories: Semicolon-separated category list
@@ -65,8 +66,8 @@ Parameter Definition Guidelines:
   * p<N>_default_value: Default value if parameter not specified
   * p<N>_value: For choice parameters - semicolon-separated list with format "actual_value\\=display_label" or just values
   * p<N>_fileFormat: For FILE parameters - semicolon-separated list of allowed extensions
-  * p<N>_prefix_when_specified: Command-line prefix/flag to add when parameter is used. When the prefix is already included in the commandLine template, this property should be left empty to avoid duplication.
-  * p<N>_prefix: Alternative command-line prefix. Include if it always needs the prefix for non-optional parameters if the flag is not already on the command line.  Usually this needs to end with some blanks spaces to separate it from the value.  If prefix_when_specified is used, this should be left empty to avoid duplication.
+  * p<N>_prefix_when_specified: Command-line prefix/flag to add when parameter is used. When the prefix is already included in the commandLine template, this property should be left empty to avoid duplication. MUST end with a space so the flag and value are separate tokens (e.g., "--input.file " not "--input.file"). Exception: use "=" suffix (e.g., "--input.file=") for equals-separated style.
+  * p<N>_prefix: Alternative command-line prefix. Include if it always needs the prefix for non-optional parameters if the flag is not already on the command line.  MUST end with a space to separate the flag from the value (e.g., "--input.file " not "--input.file"). If prefix_when_specified is used, this should be left empty to avoid duplication.
   * p<N>_flag: Command-line flag
   * p<N>_numValues: Number of values allowed (e.g., "0..1", "1..1", "0+", "1+")
   * p<N>_choiceDir: URL for dynamic choice lists from remote directories
@@ -84,8 +85,9 @@ CRITICAL FLAG NAMING RULE:
   * CORRECT: p1_name=input.file  →  p1_prefix_when_specified=--input.file
   * WRONG:   p1_name=input.file  →  p1_prefix_when_specified=--input-file  (dashes instead of dots)
 - commandLine inline flags MUST also use dots matching the parameter names
-  * CORRECT: python wrapper.py --input.file <input.file>
-  * WRONG:   python wrapper.py --input-file <input.file>
+  * CORRECT: python <libdir>wrapper.py --input.file <input.file>
+  * WRONG:   python <libdir>wrapper.py --input-file <input.file>  (dashes instead of dots)
+  * WRONG:   python wrapper.py --input.file <input.file>  (missing <libdir> prefix before wrapper script)
 - This is essential because the wrapper script's argparse/optparse definitions
   use dot-based flag names to match GenePattern parameter names. Using dashes
   instead of dots causes a fatal mismatch at runtime.
@@ -222,9 +224,9 @@ def analyze_module_metadata(context: RunContext[str], tool_name: str, tool_info:
         
         # Build basic command structure
         if language.lower() == 'python':
-            command_line_analysis += "python <wrapper_script> "
+            command_line_analysis += "python <libdir>wrapper.py "
         elif language.lower() == 'r':
-            command_line_analysis += "Rscript <wrapper_script> "
+            command_line_analysis += "Rscript <libdir>wrapper.R "
         elif language.lower() == 'java':
             command_line_analysis += "java -jar <tool_jar> "
         else:
@@ -463,9 +465,9 @@ def optimize_command_line_template(context: RunContext[str], current_command: st
         if tool_info:
             language = tool_info.get('language', '').lower()
             if language == 'python':
-                optimized_parts.append("python <wrapper.script>")
+                optimized_parts.append("python <libdir>wrapper.py")
             elif language == 'r':
-                optimized_parts.append("Rscript <wrapper.script>")
+                optimized_parts.append("Rscript <libdir>wrapper.R")
             elif language == 'java':
                 optimized_parts.append("java -jar <tool.jar>")
             else:
@@ -647,7 +649,10 @@ def create_manifest(context: RunContext[str]) -> Dict[str, Any]:
                 print(f"✓ Using command_line from planning_data (converted to placeholders): {command_line}")
             else:
                 # Build command line from wrapper_script and parameters
-                command_line = f"<{wrapper_script}>"
+                # IMPORTANT: wrapper script must be prefixed with <libdir> so GenePattern can locate it
+                command_line = f"python <libdir>{wrapper_script}" if tool_language.lower() == 'python' else \
+                               f"Rscript <libdir>{wrapper_script}" if tool_language.lower() in ('r', 'rscript') else \
+                               f"<libdir>{wrapper_script}"
 
                 # Add parameters to command line if available
                 if 'parameters' in planning_dict and planning_dict['parameters']:
@@ -657,7 +662,9 @@ def create_manifest(context: RunContext[str]) -> Dict[str, Any]:
                         command_line += f" <{param_name}>"
                     print(f"✓ Built command_line from parameters: {command_line}")
                 else:
-                    command_line = f"<{wrapper_script}> <input.file> <output.prefix>"
+                    command_line = f"python <libdir>{wrapper_script} <input.file> <output.prefix>" if tool_language.lower() == 'python' else \
+                                   f"Rscript <libdir>{wrapper_script} <input.file> <output.prefix>" if tool_language.lower() in ('r', 'rscript') else \
+                                   f"<libdir>{wrapper_script} <input.file> <output.prefix>"
                     print(f"⚠️ No parameters in planning_data, using generic command_line")
 
             # Use cpu_cores from planning_data if available (as cpuType hint)
@@ -672,7 +679,8 @@ def create_manifest(context: RunContext[str]) -> Dict[str, Any]:
             author = "GenePattern Module Toolkit"
             categories_str = "Bioinformatics;Analysis"
             wrapper_script = "wrapper.R" if tool_language == 'r' else "wrapper.py"
-            command_line = f"<{wrapper_script}> <input.file> <output.prefix>"
+            command_line = f"Rscript <libdir>{wrapper_script} <input.file> <output.prefix>" if tool_language == 'r' else \
+                           f"python <libdir>{wrapper_script} <input.file> <output.prefix>"
             cpu_cores = 1
             memory = "1GB"
             print(f"⚠️ No planning_data available, using fallback values")
@@ -853,7 +861,7 @@ def create_manifest(context: RunContext[str]) -> Dict[str, Any]:
             "LSID": "urn:lsid:genepattern.org:module.analysis:unknowntool:1",
             "version": "1.0",
             "description": "Bioinformatics analysis tool",
-            "commandLine": "<wrapper.py> <input.file> <output.prefix>",
+            "commandLine": "python <libdir>wrapper.py <input.file> <output.prefix>",
             "artifact_report": f"Error during manifest generation: {error_msg}\n\nTraceback:\n{traceback_str}",
             "artifact_status": "error"
         }

@@ -63,6 +63,7 @@ class GenerationScript:
         tool_info['repository_url'] = input("Repository URL (optional): ").strip()
         tool_info['documentation_url'] = input("Documentation URL (optional): ").strip()
         tool_info['instructions'] = input("Additional instructions/context (optional): ").strip()
+        tool_info['base_image'] = input("Known Docker base image (optional, e.g. 'broadinstitute/gatk:4.5.0.0'): ").strip()
 
         # Example data (optional)
         data_input = input("Example data files or URLs (space-separated, optional).\n"
@@ -109,6 +110,10 @@ class GenerationScript:
         parser.add_argument('--repository-url', type=str, help='URL of the source code repository')
         parser.add_argument('--documentation-url', type=str, help='URL of the tool documentation')
         parser.add_argument('--instructions', type=str, help='Additional instructions and context for module generation (e.g., which features to expose, which function to call)')
+        parser.add_argument('--base-image', type=str, metavar='IMAGE',
+                            help='Known Docker base image to use (e.g. "broadinstitute/gatk:4.5.0.0"). '
+                                 'When provided this value is written directly into the plan\'s docker_image_tag '
+                                 'field and passed to the Dockerfile agent, skipping the automatic image selection.')
 
         # Artifact skip flags
         parser.add_argument('--skip-wrapper', action='store_true', help='Skip generating wrapper script')
@@ -184,6 +189,7 @@ class GenerationScript:
             'repository_url': self.args.repository_url or "",
             'documentation_url': self.args.documentation_url or "",
             'instructions': self.args.instructions or "",
+            'base_image': self.args.base_image or "",
             'example_data': [],
             'module_dir': self.args.module_dir or "",
         }

@@ -309,6 +309,14 @@ class ModuleAgent:
             if tool_info.get('instructions'):
                 instructions_section = f"\n            Additional Instructions (IMPORTANT - Pay close attention to these):\n            {tool_info['instructions']}\n"
 
+            base_image_section = ""
+            if tool_info.get('base_image'):
+                base_image_section = (
+                    f"\n            Base Docker Image (CRITICAL - use this EXACTLY as the docker_image_tag field):\n"
+                    f"            {tool_info['base_image']}\n"
+                    f"            Do NOT invent or normalise a genepattern/* tag — use the value above verbatim.\n"
+                )
+
             example_data_section = ""
             example_data = tool_info.get('example_data') or []
             if example_data:
@@ -333,7 +341,7 @@ class ModuleAgent:
             - Name: {tool_info['name']}
             - Version: {tool_info['version']}
             - Language: {tool_info['language']}
-            - Description: {tool_info.get('description', 'Not provided')}{instructions_section}{example_data_section}
+            - Description: {tool_info.get('description', 'Not provided')}{instructions_section}{base_image_section}{example_data_section}
             
             Research Results:
             {research_data.get('research', 'No research data available')}
