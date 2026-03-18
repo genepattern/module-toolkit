@@ -251,22 +251,26 @@ def _find_wrapper_script(manifest_path: str) -> Optional[str]:
 # Main run_test entry point
 # ---------------------------------------------------------------------------
 
-def run_test(lines: List[str], manifest_path: str = None) -> List[LintIssue]:
+def run_test(lines: List[str], context: dict = None) -> List[LintIssue]:
     """
     Cross-check manifest flags against wrapper script accepted flags.
 
     Args:
         lines: Lines from the manifest file.
-        manifest_path: Absolute path to the manifest file (optional).
-                       When None the test is skipped.
+        context: Shared context dict from the linter.  Must contain
+                 'manifest_path' (str) so the test can locate sibling files.
+                 When absent or empty the test is skipped silently.
 
     Returns:
         List of LintIssue objects for any mismatches found.
     """
     issues: List[LintIssue] = []
 
-    # Without a path we cannot find the wrapper — skip silently
-    if not manifest_path:
+    # Extract manifest_path from context; skip if not available
+    if not context or not isinstance(context, dict):
+        return issues
+    manifest_path = context.get("manifest_path")
+    if not manifest_path or not isinstance(manifest_path, str):
         return issues
 
     wrapper_path = _find_wrapper_script(manifest_path)

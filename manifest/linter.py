@@ -148,6 +148,9 @@ def run_modular_tests(manifest_path: str, context: dict = None) -> Tuple[bool, L
     if context is None:
         context = {}
 
+    # Always make the resolved manifest_path available to tests
+    context["manifest_path"] = manifest_path
+
     all_issues: List[LintIssue] = []
 
     # Basic file validation
