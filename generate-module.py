@@ -66,7 +66,10 @@ class GenerationScript:
         tool_info['base_image'] = input("Known Docker base image (optional, e.g. 'broadinstitute/gatk:4.5.0.0'): ").strip()
 
         # Example data (optional)
-        data_input = input("Example data files or URLs (space-separated, optional): ").strip()
+        data_input = input("Example data files or URLs (space-separated, optional).\n"
+                           "  Tip: append ::hint to clarify each file's role, e.g.:\n"
+                           "    sample1.bam::tumor_sample sample2.bam::normal_sample hg38.fasta::reference\n"
+                           "> ").strip()
         if data_input:
             raw_items = data_input.split()
             resolver = ExampleDataResolver(self.logger)
@@ -160,10 +163,19 @@ class GenerationScript:
                             help='GenePattern password (or set GP_PASSWORD env var)')
 
         # Example data
-        parser.add_argument('--data', nargs='+', metavar='PATH_OR_URL',
-                            help='Example data files (local paths or HTTP/HTTPS URLs). URLs are downloaded '
-                                 'before planning so their contents can inform the LLM. Local files are '
-                                 'used directly. All files are bind-mounted during the Dockerfile runtime test.')
+        parser.add_argument('--data', nargs='+', metavar='PATH_OR_URL[::HINT]',
+                            help='Example data files (local paths or HTTP/HTTPS URLs). '
+                                 'Each entry may include an optional semantic hint after "::" '
+                                 'to clarify the role of the file when multiple files share the '
+                                 'same extension (e.g. sample1.bam::tumor_sample '
+                                 'sample2.bam::normal_sample hg38.fasta::reference '
+                                 'foo.vcf::germline_resource bar.vcf::panel_of_normals). '
+                                 'Hints are shown to the LLM during planning and artifact '
+                                 'generation, and are used by the runtime test to assign the '
+                                 'correct file to each parameter when multiple files have the '
+                                 'same extension. URLs are downloaded before planning so their '
+                                 'contents can inform the LLM. Local files are used directly. '
+                                 'All files are bind-mounted during the Dockerfile runtime test.')
 
         self.args = parser.parse_args()
 

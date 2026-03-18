@@ -252,10 +252,12 @@ class ModuleAgent:
                 lines = ["", "            Example Data Provided (for reference only):"]
                 for item in example_data:
                     kind = "URL" if item.is_url else "local file"
-                    lines.append(f"            - {item.filename} ({item.extension}) — {kind}")
+                    lines.append(f"            - {item.filename} ({item.extension}) — {kind}{item.hint_label}")
                 lines.append("            These are examples of data the user already has. Use them to understand typical")
                 lines.append("            input formats, but do NOT restrict your research to only these formats. Document")
                 lines.append("            ALL formats the tool supports so the module remains broadly useful.")
+                lines.append("            Where a [hint: ...] is shown, it describes the semantic role of that file")
+                lines.append("            (e.g. 'tumor_sample', 'reference', 'germline_resource').")
                 lines.append("")
                 example_data_section = "\n".join(lines)
 
@@ -321,11 +323,14 @@ class ModuleAgent:
                 lines = ["", "            Example Data Provided (for reference only):"]
                 for item in example_data:
                     kind = "URL" if item.is_url else "local file"
-                    lines.append(f"            - {item.filename} ({item.extension}) — {kind}")
+                    lines.append(f"            - {item.filename} ({item.extension}) — {kind}{item.hint_label}")
                 lines.append("            The user has this format available, so the module MUST accept it. However, do")
                 lines.append("            NOT restrict the file_formats field to only this extension — include every")
                 lines.append("            format the tool legitimately supports. The example data tells you what to")
                 lines.append("            include, not what to exclude.")
+                lines.append("            Where a [hint: ...] is shown, use it to assign the file to the correct")
+                lines.append("            parameter (e.g. a file hinted 'tumor_sample' maps to the tumor BAM input,")
+                lines.append("            'germline_resource' maps to the germline VCF parameter, etc.).")
                 lines.append("")
                 example_data_section = "\n".join(lines)
 
@@ -447,6 +452,11 @@ class ModuleAgent:
                 status.artifacts_status[artifact_name]['attempts'] = attempt
                 self.save_status(status)
 
+                # Serialize planning_data here for use in prompt-building below.
+                # NOTE: deps_context re-serializes immediately before the agent
+                # call so that any correction made by _sync_wrapper_script (which
+                # runs in generate_all_artifacts before this loop is entered) is
+                # always reflected in what the LLM tool receives.
                 planning_data_dict = planning_data.model_dump(mode='json')
                 example_data: List[ExampleDataItem] = status.example_data or []
                 downstream_section = build_downstream_error_section()
@@ -461,10 +471,13 @@ class ModuleAgent:
                         lines = ["\nExample Data Provided (for cross-check only):"]
                         for item in example_data:
                             kind = "URL" if item.is_url else "local file"
-                            lines.append(f"- {item.filename} ({item.extension}) — {kind}")
+                            lines.append(f"- {item.filename} ({item.extension}) — {kind}{item.hint_label}")
                         lines.append("Confirm that the fileFormat field on the relevant input parameter(s) includes")
                         lines.append("this extension. Do NOT replace the full format list with only this extension —")
                         lines.append("all formats the tool legitimately supports must remain present.")
+                        lines.append("Where a [hint: ...] is shown, use it to match each file to the correct")
+                        lines.append("parameter (e.g. 'tumor_sample' → tumor BAM parameter, 'reference' → reference")
+                        lines.append("FASTA parameter, 'germline_resource' → germline VCF parameter).")
                         example_data_section = "\n".join(lines)
 
                     error_history = build_error_history()
@@ -497,8 +510,11 @@ Generate a complete, valid manifest file in key=value format."""
                         if local_items:
                             lines = ["\nExample Data for Test Parameters:"]
                             for item in local_items:
-                                lines.append(f"- {item.local_path}  (use as the value for the matching file input parameter)")
+                                hint_suffix = f"  # {item.hint}" if item.hint else ""
+                                lines.append(f"- {item.local_path}  (use as the value for the matching file input parameter){hint_suffix}")
                             lines.append("Use these exact local paths as parameter values in the test YAML.")
+                            lines.append("Where a comment shows a hint (e.g. '# tumor_sample'), use it to identify")
+                            lines.append("which parameter this file corresponds to.")
                             lines.append("For all other parameters (numeric, text, choice), use sensible default or")
                             lines.append("representative values. Do not invent placeholder strings like '<path_to_input>'.")
                             example_data_section = "\n".join(lines)
@@ -530,11 +546,13 @@ Make sure the generated artifact follows all guidelines, key requirements and cr
                         lines = ["\nExample Data Provided:"]
                         for item in example_data:
                             kind = "URL" if item.is_url else "local file"
-                            lines.append(f"- {item.filename} ({item.extension}) — {kind}")
+                            lines.append(f"- {item.filename} ({item.extension}) — {kind}{item.hint_label}")
                         lines.append("These files represent distinct input roles. When grouping parameters, keep")
                         lines.append("parameters that correspond to related input files in the same logical group")
                         lines.append("(e.g., place a counts matrix and metadata file parameters together in an")
                         lines.append("'Input Files' group rather than splitting them across unrelated groups).")
+                        lines.append("Where a [hint: ...] is shown, use it to understand the semantic role of each")
+                        lines.append("file when deciding how to group its corresponding parameter.")
                         example_data_section = "\n".join(lines)
 
                     error_history = build_error_history()
@@ -561,7 +579,8 @@ Make sure the generated artifact follows all guidelines, key requirements and cr
                     if local_items:
                         lines = ["\nExample Data for Runtime Validation:"]
                         for item in local_items:
-                            lines.append(f"- {item.local_path} (will be bind-mounted into the container as /data/{item.filename})")
+                            hint_suffix = f"  # role: {item.hint}" if item.hint else ""
+                            lines.append(f"- {item.local_path} (will be bind-mounted into the container as /data/{item.filename}){hint_suffix}")
                         lines.append("After the image is built, a runtime command will be run using this file")
                         lines.append("bind-mounted into the container — no network access or download utilities")
                         lines.append("(wget, curl) are needed inside the image for this test. Ensure all dependencies")
@@ -570,7 +589,7 @@ Make sure the generated artifact follows all guidelines, key requirements and cr
                         example_data_section = "\n".join(lines)
 
                     wrapper_source_section = ""
-                    _wrapper_script = planning_data_dict.get('wrapper_script') or 'wrapper.py'
+                    _wrapper_script = planning_data.wrapper_script or 'wrapper.py'
                     _wrapper_path = module_path / _wrapper_script
                     if _wrapper_path.exists():
                         try:
@@ -591,7 +610,18 @@ Make sure the generated artifact follows all guidelines, key requirements and cr
                             'ModuleNotFoundError', 'ImportError', 'command not found',
                             'exit code:', 'executor failed', 'FAILED',
                             'the following arguments are required:', 'usage:',
+                            'unrecognized arguments', 'TypeError:',
+                            'has no matching flag',
                             'unexpected end of statement', 'failed to process',
+                            # Docker COPY source missing (BuildKit and classic)
+                            'file not found in build context',
+                            'file does not exist',
+                            'COPY failed:',
+                            'failed to solve:',
+                            # GATK / Java runtime errors
+                            'USER ERROR', 'A USER ERROR has occurred',
+                            'Exception in thread', 'java.lang.', 'java.io.',
+                            'htsjdk.', 'org.broadinstitute.',
                         ]
                         extracted = []
                         for ln in raw.splitlines():
@@ -623,7 +653,18 @@ Make sure the generated artifact follows all guidelines, key requirements and cr
                             'ModuleNotFoundError', 'ImportError', 'command not found',
                             'exit code:', 'executor failed', 'FAILED',
                             'the following arguments are required:', 'usage:',
+                            'unrecognized arguments', 'TypeError:',
+                            'has no matching flag',
                             'unexpected end of statement', 'failed to process',
+                            # Docker COPY source missing (BuildKit and classic)
+                            'file not found in build context',
+                            'file does not exist',
+                            'COPY failed:',
+                            'failed to solve:',
+                            # GATK / Java runtime errors
+                            'USER ERROR', 'A USER ERROR has occurred',
+                            'Exception in thread', 'java.lang.', 'java.io.',
+                            'htsjdk.', 'org.broadinstitute.',
                         ]
                         extracted = []
                         for line in error_report.splitlines():
@@ -639,11 +680,52 @@ Make sure the generated artifact follows all guidelines, key requirements and cr
                                 "to confirm every package name is valid. If a package is not found, search for "
                                 "the correct name before using it."
                             )
-                            if any('the following arguments are required' in e or 'usage:' in e for e in extracted):
+                            # ── COPY source missing ──────────────────────────────────────────
+                            _copy_missing_indicators = (
+                                'file not found in build context',
+                                'file does not exist',
+                                'COPY failed:',
+                            )
+                            if any(ind in e for e in extracted for ind in _copy_missing_indicators):
+                                # Extract the filename Docker complained about, if present.
+                                # BuildKit: "stat <name>: file does not exist"
+                                # Classic:  "COPY failed: … stat <name>: no such file or directory"
+                                import re as _re
+                                _copy_filenames = _re.findall(
+                                    r'stat\s+([\w./-]+)\s*:', error_report
+                                )
+                                _filename_hint = ""
+                                if _copy_filenames:
+                                    _copy_filenames = list(dict.fromkeys(_copy_filenames))
+                                    _filename_hint = (
+                                        f" Docker reported the missing file(s) as: "
+                                        f"{', '.join(_copy_filenames)}."
+                                    )
                                 structured_errors_section += (
-                                    "\n\nThe runtime test command failed because arguments were passed in the wrong style. "
-                                    "The wrapper uses named --flag style arguments (e.g. --input-file, --command). "
-                                    "Check the usage: line in the error above for the exact flag names required."
+                                    "\n\nDOCKER BUILD FAILED — COPY SOURCE FILE NOT FOUND:"
+                                    f"{_filename_hint}"
+                                    "\nThe Dockerfile contains a COPY instruction that references a file"
+                                    " which does not exist in the build context (the module directory)."
+                                    " This is a filename mismatch, NOT a package problem."
+                                    " DO NOT change apt-get install lines to fix this."
+                                    "\nTo fix:"
+                                    "\n  1. Check the wrapper script filename that was actually generated"
+                                    " (look at the 'Wrapper Script' section above for the real filename)."
+                                    "\n  2. Update the COPY instruction to use that exact filename"
+                                    " (e.g. 'COPY wrapper.py /module/wrapper.py')."
+                                    "\n  3. Ensure the WORKDIR and COPY destination are consistent so"
+                                    " 'python wrapper.py' resolves correctly inside the container."
+                                )
+                            if any('the following arguments are required' in e or 'usage:' in e or 'unrecognized arguments' in e.lower() for e in extracted):
+                                structured_errors_section += (
+                                    "\n\nThe runtime test command failed because the manifest commandLine passes "
+                                    "argument names that do not match what the wrapper's argparse declares. "
+                                    "The manifest's pN_name values and commandLine template are the source of "
+                                    "truth for flag names — the wrapper's add_argument() calls MUST use the "
+                                    "exact same dot-notation names (e.g. '--intervals.file' not '--intervals'). "
+                                    "Check the usage: line in the error for the wrapper's actual flag names, "
+                                    "then either (a) fix the wrapper to accept the manifest's flag names, or "
+                                    "(b) fix the manifest commandLine to use the wrapper's actual flag names."
                                 )
                             if any('unexpected end of statement' in e or 'failed to process' in e for e in extracted):
                                 structured_errors_section += (
@@ -651,6 +733,28 @@ Make sure the generated artifact follows all guidelines, key requirements and cr
                                     "shell metacharacter. Do NOT use double-quoted strings in RUN echo or comment "
                                     "lines. Use single quotes or no quotes. Check every RUN instruction for "
                                     "unbalanced double-quotes."
+                                )
+                            if any("'type' object is not subscriptable" in e for e in extracted):
+                                structured_errors_section += (
+                                    "\n\nPYTHON VERSION INCOMPATIBILITY: The wrapper uses built-in generic type "
+                                    "annotations (e.g. list[str], dict[str, int]) that require Python 3.9+. "
+                                    "The container's Python version is older. The wrapper must be fixed by "
+                                    "adding 'from __future__ import annotations' as the very first import, "
+                                    "OR by replacing bare built-in generics with typing module equivalents "
+                                    "(e.g. List[str], Dict[str, int], Optional[str] from 'from typing import ...')."
+                                )
+                            if any('has no matching flag in the wrapper' in e for e in extracted):
+                                structured_errors_section += (
+                                    "\n\nMANIFEST/WRAPPER CONSISTENCY ERROR: The manifest declares parameter "
+                                    "names (pN_name=...) that do not match any add_argument() flag in the "
+                                    "wrapper script. The error lines above list the exact parameter names that "
+                                    "are mismatched and what flags the wrapper actually declares. "
+                                    "You MUST use the wrapper's actual flag names as the manifest pN_name "
+                                    "values (e.g. if the wrapper has '--input.tumor.bam', the manifest must "
+                                    "have pN_name=input.tumor.bam). Do NOT invent new parameter names. "
+                                    "The wrapper's declared flags are shown in the error: "
+                                    "'Wrapper declares: --flag1, --flag2, ...'. "
+                                    "Every pN_name in the manifest must appear in that list."
                                 )
 
                     prompt = f"""Generate the {artifact_name} artifact for the GenePattern module '{tool_info['name']}'.
@@ -662,11 +766,54 @@ This is attempt {attempt} of {max_loops}.{instructions_section}{example_data_sec
 
 Call the {create_method} tool with the following parameters:
 - wrapper_source: Pass the FULL wrapper script source shown above in the "Wrapper Script" section (pass an empty string if no wrapper source was shown).
-- planning_data: Pass the planning data as a dictionary with keys: wrapper_script, parameters, input_file_formats, cpu_cores, memory, docker_image_tag.
 - error_report: {repr(error_report)}
 - attempt: {attempt}.
 The tool will parse the wrapper's import statements programmatically to determine the correct pip/R packages to install.
 Make sure the generated artifact follows all guidelines, key requirements and critical rules and edit what the tool gave you as needed."""
+
+                elif artifact_name == 'wrapper':
+                    instructions_section = ""
+                    if tool_info.get('instructions'):
+                        instructions_section = f"\n\nIMPORTANT - Additional Instructions:\n{tool_info['instructions']}\n"
+
+                    # Build an explicit list of parameter names from planning data so the
+                    # LLM cannot silently substitute its own names.
+                    param_names_section = ""
+                    planned_params = planning_data_dict.get('parameters', [])
+                    if planned_params:
+                        param_lines_list = []
+                        for p in planned_params:
+                            pname = p.get('name', '?') if isinstance(p, dict) else getattr(p, 'name', '?')
+                            ptype = p.get('type', 'text') if isinstance(p, dict) else getattr(p, 'type', 'text')
+                            preq  = p.get('required', False) if isinstance(p, dict) else getattr(p, 'required', False)
+                            req_label = 'required' if preq else 'optional'
+                            param_lines_list.append(f"  - {pname} ({ptype}, {req_label})")
+                        param_names_section = (
+                            "\n\n⚠️  PARAMETER NAMES ARE FIXED — DO NOT RENAME THEM ⚠️\n"
+                            "The wrapper MUST use EXACTLY the following parameter names as CLI flags "
+                            "(e.g. --tumor.bam, not --input.tumor.bam; --reference, not --reference.fasta). "
+                            "These names come from the planning data and must match the manifest exactly:\n"
+                            + "\n".join(param_lines_list)
+                            + "\n\nDo NOT add a prefix like 'input.' or rename any parameter for any reason. "
+                            "The create_wrapper tool will generate a scaffold using these exact names — "
+                            "preserve them as-is in the final wrapper.\n"
+                        )
+
+                    error_history = build_error_history()
+                    prompt = f"""Generate the wrapper artifact for the GenePattern module '{tool_info['name']}'.
+{param_names_section}
+{error_history if error_history else ""}
+{downstream_section}
+This is attempt {attempt} of {max_loops}.{instructions_section}
+
+Call the {create_method} tool with the following parameters:
+- tool_info: Use the tool information provided
+- planning_data: Use the planning data provided
+- error_report: {repr(error_report)}
+- attempt: {attempt}.
+The tool generates a scaffold using the exact parameter names listed above. You may extend the
+scaffold with better validation, logging, and error handling, but you MUST NOT rename any
+parameter — every --flag in the final wrapper must exactly match the names listed above."""
 
                 else:
                     instructions_section = ""
@@ -689,7 +836,7 @@ Make sure the generated artifact follows all guidelines, key requirements and cr
 
                 deps_context = {
                     'tool_info': tool_info,
-                    'planning_data': planning_data_dict,
+                    'planning_data': planning_data.model_dump(mode='json'),
                     'error_report': error_report,
                     'attempt': attempt
                 }
@@ -727,7 +874,32 @@ Make sure the generated artifact follows all guidelines, key requirements and cr
 
                 # Prepare extra validation arguments based on artifact type
                 extra_validation_args = None
-                if artifact_name == 'dockerfile':
+                if artifact_name == 'wrapper':
+                    # Pass planning-data parameter names so the wrapper linter can
+                    # verify that every planned parameter appears as a --flag in
+                    # the generated wrapper script.
+                    planned_params = planning_data_dict.get('parameters', [])
+                    if planned_params:
+                        param_names_for_lint = [
+                            p['name'] for p in planned_params
+                            if isinstance(p, dict) and p.get('name')
+                        ]
+                        if param_names_for_lint:
+                            extra_validation_args = ['--parameters'] + param_names_for_lint
+                            self.logger.print_status(
+                                f"Passing {len(param_names_for_lint)} planning-data parameter names to wrapper linter"
+                            )
+
+                elif artifact_name == 'manifest':
+                    # Pass the wrapper script path so the consistency linter can
+                    # cross-check manifest parameter names against add_argument() flags.
+                    wrapper_script = planning_data_dict.get('wrapper_script') or 'wrapper.py'
+                    wrapper_path = module_path / wrapper_script
+                    if wrapper_path.exists():
+                        extra_validation_args = ['--wrapper', str(wrapper_path)]
+                        self.logger.print_status(f"Passing wrapper to manifest linter: {wrapper_path.name}")
+
+                elif artifact_name == 'dockerfile':
                     docker_tag = planning_data_dict.get('docker_image_tag', '')
                     extra_validation_args = []
                     if docker_tag:
@@ -909,6 +1081,96 @@ Make sure the generated artifact follows all guidelines, key requirements and cr
         """Validate an artifact using its linter. Delegates to agents.validator."""
         return _validate_artifact(file_path, validate_tool, extra_args, self.logger)
 
+    def _sync_wrapper_script(
+        self,
+        planning_data: 'ModulePlan',
+        module_path: Path,
+        status: 'ModuleGenerationStatus',
+        *,
+        context: str = "",
+    ) -> None:
+        """Ensure planning_data.wrapper_script points to a file that actually exists.
+
+        After wrapper generation the LLM may have written a file whose name
+        differs from what planning_data.wrapper_script says (e.g. the plan said
+        ``run_mutect2.py`` but the file on disk is ``wrapper.py``).  This method:
+
+        1. Checks whether ``module_path / planning_data.wrapper_script`` exists.
+        2. If it does not, scans *module_path* for the most likely wrapper
+           candidate (a ``.py``, ``.R``, or ``.sh`` file that is not a known
+           non-wrapper name) and updates ``planning_data.wrapper_script`` to
+           match.
+        3. Persists the updated status to disk so all downstream steps pick up
+           the corrected name.
+        """
+        expected_name = planning_data.wrapper_script or "wrapper.py"
+        expected_path = module_path / expected_name
+
+        ctx_prefix = f"[{context}] " if context else ""
+
+        if expected_path.exists():
+            self.logger.print_status(
+                f"{ctx_prefix}wrapper_script '{expected_name}' confirmed on disk ✓"
+            )
+            return
+
+        # The expected file is missing — scan for a real wrapper candidate.
+        self.logger.print_status(
+            f"{ctx_prefix}⚠️  wrapper_script '{expected_name}' not found in {module_path} "
+            f"— scanning for actual wrapper file",
+            "WARNING",
+        )
+
+        # Non-wrapper filenames that share extensions with wrappers
+        _NON_WRAPPER_NAMES = frozenset({
+            "manage.py", "setup.py", "setup.cfg", "conftest.py",
+        })
+
+        wrapper_extensions = (".py", ".R", ".r", ".sh", ".bash", ".pl")
+        candidates = []
+        for p in module_path.iterdir():
+            if (
+                p.is_file()
+                and p.suffix.lower() in wrapper_extensions
+                and p.name not in _NON_WRAPPER_NAMES
+            ):
+                candidates.append(p)
+
+        if not candidates:
+            self.logger.print_status(
+                f"{ctx_prefix}No wrapper-like file found in {module_path}; "
+                f"keeping planning_data.wrapper_script='{expected_name}' unchanged",
+                "WARNING",
+            )
+            return
+
+        # Prefer files whose names start with "wrapper" or match common patterns;
+        # fall back to the first candidate sorted by name.
+        def _score(p: Path) -> int:
+            n = p.name.lower()
+            if n.startswith("wrapper"):
+                return 0
+            if n.startswith("run_"):
+                return 1
+            return 2
+
+        candidates.sort(key=_score)
+        chosen = candidates[0]
+        old_name = planning_data.wrapper_script
+        planning_data.wrapper_script = chosen.name
+
+        # Reflect the correction in status.planning_data if it is the same object
+        if status.planning_data is planning_data:
+            pass  # already updated via the shared reference
+        elif status.planning_data is not None:
+            status.planning_data.wrapper_script = chosen.name
+
+        self.logger.print_status(
+            f"{ctx_prefix}✅ Corrected wrapper_script: '{old_name}' → '{chosen.name}'",
+            "WARNING",
+        )
+        self.save_status(status)
+
     def generate_all_artifacts(self, tool_info: Dict[str, str], planning_data: ModulePlan, module_path: Path, status: ModuleGenerationStatus, skip_artifacts: List[str] = None, max_loops: int = MAX_ARTIFACT_LOOPS, max_escalations: int = MAX_ESCALATIONS, no_zip: bool = False, zip_only: bool = False, gp_server: Optional[str] = None, gp_user: Optional[str] = None, gp_password: Optional[str] = None) -> bool:
         """Run artifact generation phase with cross-artifact error escalation."""
         self.logger.print_section("Artifact Generation Phase")
@@ -951,6 +1213,17 @@ Make sure the generated artifact follows all guidelines, key requirements and cr
                     tool_info, planning_data, module_path, zip_only, gp_server, gp_user, gp_password
                 )
             else:
+                # Before starting the dockerfile step, make absolutely sure
+                # planning_data.wrapper_script points to a file that exists on
+                # disk.  This guards against cases where the wrapper was skipped
+                # (--skip-wrapper), resumed from a prior run, or the sync above
+                # was not triggered (e.g. wrapper generation failed but the run
+                # is being resumed with the file already present).
+                if artifact_name == 'dockerfile':
+                    self._sync_wrapper_script(
+                        planning_data, module_path, status,
+                        context="pre-dockerfile assertion",
+                    )
                 result = self.artifact_creation_loop(
                     artifact_name, tool_info, planning_data, module_path, status,
                     max_loops,
@@ -958,6 +1231,15 @@ Make sure the generated artifact follows all guidelines, key requirements and cr
                 )
 
             if result.success:
+                # After the wrapper is written to disk, verify planning_data.wrapper_script
+                # matches the actual filename.  The LLM sometimes saves a file with a
+                # different name than what the plan specified (e.g. wrapper.py vs
+                # run_mutect2.py), which would cause the Dockerfile COPY to fail later.
+                if artifact_name == 'wrapper':
+                    self._sync_wrapper_script(
+                        planning_data, module_path, status,
+                        context="post-wrapper sync",
+                    )
                 idx += 1
                 continue
 
@@ -1007,11 +1289,52 @@ Make sure the generated artifact follows all guidelines, key requirements and cr
                         status.artifacts_status[target]['generated'] = False
                     self.save_status(status)
 
+                    # Build an enriched context message for manifest/wrapper escalations
+                    # that includes wrapper flag details to guide alignment.
+                    extra_context = ""
+                    if target in ('manifest', 'wrapper'):
+                        planning_dict_esc = planning_data.model_dump(mode='json') if planning_data else {}
+                        wrapper_script_esc = planning_dict_esc.get('wrapper_script') or 'wrapper.py'
+                        wrapper_path_esc = module_path / wrapper_script_esc
+                        if wrapper_path_esc.exists():
+                            try:
+                                import ast as _ast
+                                wrapper_src = wrapper_path_esc.read_text(encoding='utf-8', errors='replace')
+                                # Extract declared flags for the context message
+                                declared_flags = []
+                                try:
+                                    tree = _ast.parse(wrapper_src)
+                                    for node in _ast.walk(tree):
+                                        if isinstance(node, _ast.Call):
+                                            func = node.func
+                                            is_add_arg = (
+                                                (isinstance(func, _ast.Attribute) and func.attr == 'add_argument')
+                                                or (isinstance(func, _ast.Name) and func.id == 'add_argument')
+                                            )
+                                            if is_add_arg:
+                                                for a in node.args:
+                                                    if isinstance(a, _ast.Constant) and isinstance(a.value, str) and a.value.startswith('--'):
+                                                        declared_flags.append(a.value)
+                                except Exception:
+                                    pass
+                                if declared_flags:
+                                    extra_context = (
+                                        f"\n\nWrapper script '{wrapper_script_esc}' currently declares these "
+                                        f"add_argument() flags:\n"
+                                        + "\n".join(f"  {f}" for f in sorted(declared_flags))
+                                        + "\n\nThe manifest pN_name values and commandLine placeholders MUST "
+                                        "use these exact flag names (or the wrapper must be updated to match "
+                                        "the manifest's parameter names — they must be consistent)."
+                                    )
+                            except Exception:
+                                pass
+
                     pending_downstream_context[target] = (
                         f"The downstream artifact '{artifact_name}' failed validation "
                         f"with the following error:\n\n"
-                        f"{result.error_text[:1000]}\n\n"
-                        f"Root-cause analysis: {root_cause.reason}\n\n"
+                        f"{result.error_text[:1500]}\n\n"
+                        f"Root-cause analysis: {root_cause.reason}"
+                        f"{extra_context}\n\n"
                         f"You must fix the issue in THIS artifact ({target}) so that "
                         f"the downstream '{artifact_name}' step can succeed."
                     )
@@ -1040,7 +1363,42 @@ Make sure the generated artifact follows all guidelines, key requirements and cr
                     f"❌ Failed to generate {artifact_name} after {max_loops} attempts"
                 )
                 all_artifacts_successful = False
-                idx += 1
+
+                # When manifest or wrapper fails, pre-warn the dockerfile agent
+                # because the runtime validation command is built from the on-disk
+                # manifest — if the manifest is broken the dockerfile test will also
+                # fail for the wrong reason (mismatched arg names, not a Docker issue).
+                if artifact_name in ('manifest', 'wrapper'):
+                    failure_summary = result.error_text[:1500] if result.error_text else ""
+                    existing_ctx = pending_downstream_context.get('dockerfile', '')
+                    new_ctx = (
+                        f"WARNING: The '{artifact_name}' artifact failed validation. "
+                        f"The dockerfile runtime test command is derived from the manifest "
+                        f"commandLine — if the manifest has wrong parameter names the "
+                        f"runtime test will fail with 'unrecognized arguments' even if the "
+                        f"Dockerfile itself is correct. "
+                        f"DO NOT attempt to fix this by changing the Dockerfile. "
+                        f"The wrapper's add_argument() flags and the manifest pN_name values "
+                        f"must be made consistent first.\n\n"
+                        f"{artifact_name} failure details:\n{failure_summary}"
+                    )
+                    if existing_ctx:
+                        pending_downstream_context['dockerfile'] = existing_ctx + "\n\n" + new_ctx
+                    else:
+                        pending_downstream_context['dockerfile'] = new_ctx
+
+                # Abort the remaining pipeline — there is no point generating further
+                # artifacts when one has permanently failed, because downstream artifacts
+                # depend on this one (or the module is simply incomplete).
+                # Zipping, upload, and install are also skipped.
+                remaining_queue = artifact_queue[idx + 1:]
+                if remaining_queue:
+                    skipped_names = ', '.join(remaining_queue)
+                    self.logger.print_status(
+                        f"⛔ Aborting pipeline: skipping remaining artifact(s): {skipped_names}",
+                        "WARNING",
+                    )
+                break
 
         return all_artifacts_successful
 
@@ -1263,6 +1621,7 @@ Make sure the generated artifact follows all guidelines, key requirements and cr
             if example_data is not None:
                 status.example_data = example_data
                 self.logger.print_status(f"Overriding example_data with {len(example_data)} item(s) from --data")
+                self.save_status(status)  # persist hints immediately so they survive any mid-run crash
 
             if not tool_info:
                 language = 'unknown'

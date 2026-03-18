@@ -85,6 +85,17 @@ CRITICAL GENEPATTERN FLAG NAMING CONVENTION:
   prefix_when_specified values exactly. Using dashes instead of dots causes
   a fatal mismatch at runtime.
 
+CRITICAL: PLANNING DATA PARAMETER NAMES ARE THE SINGLE SOURCE OF TRUTH
+- The parameter names provided by the create_wrapper tool (from planning_data) are
+  AUTHORITATIVE and MUST be used verbatim as CLI flags.
+- You MUST NOT rename, expand, abbreviate, or add prefixes to parameter names.
+  * If planning_data says "reference"   → use --reference   (NOT --reference.fasta)
+  * If planning_data says "tumor.bam"   → use --tumor.bam   (NOT --input.tumor.bam)
+  * If planning_data says "normal.bam"  → use --normal.bam  (NOT --input.normal.bam)
+  * If planning_data says "output.vcf.name" → use --output.vcf.name (NOT --output.vcf)
+- These names are locked to match the manifest pN_name values. Any deviation will
+  cause a manifest/wrapper consistency failure that cannot be auto-corrected.
+
 Error Handling Strategy:
 - Validate all input parameters before tool execution
 - Check file existence and permissions before processing
@@ -413,8 +424,9 @@ def generate_wrapper_structure(context: RunContext[str], language: str, paramete
             param_type = param.get('type', 'Text')
             required = param.get('required', False)
             description = param.get('description', f'{param_name} parameter')
-            
-            structure += f"    parser.add_argument('--{param_name.replace('_', '-')}',\n"
+            param_var = param_name.replace('.', '_').replace('-', '_')
+
+            structure += f"    parser.add_argument('--{param_name}', dest='{param_var}',\n"
             if required:
                 structure += "                       required=True,\n"
             if param_type == 'Choice':
@@ -468,7 +480,7 @@ def generate_wrapper_structure(context: RunContext[str], language: str, paramete
         
         structure += "# Default parameter values\n"
         for param in parameters[:3]:
-            param_name = param.get('name', 'unknown').upper()
+            param_name = param.get('name', 'unknown').upper().replace('.', '_').replace('-', '_')
             default_value = param.get('default', '""')
             structure += f"{param_name}={default_value}\n"
         structure += "\n"
@@ -479,7 +491,7 @@ def generate_wrapper_structure(context: RunContext[str], language: str, paramete
         for param in parameters[:3]:
             param_name = param.get('name', 'unknown')
             description = param.get('description', f'{param_name} parameter')
-            structure += f'    echo "  --{param_name.replace("_", "-")} VALUE    {description}"\n'
+            structure += f'    echo "  --{param_name} VALUE    {description}"\n'
         structure += '    exit 1\n'
         structure += "}\n\n"
         
@@ -488,8 +500,8 @@ def generate_wrapper_structure(context: RunContext[str], language: str, paramete
         structure += "        case $1 in\n"
         for param in parameters[:3]:
             param_name = param.get('name', 'unknown')
-            param_var = param_name.upper()
-            structure += f"            --{param_name.replace('_', '-')})\n"
+            param_var = param_name.upper().replace('.', '_').replace('-', '_')
+            structure += f"            --{param_name})\n"
             structure += f"                {param_var}=\"$2\"\n"
             structure += "                shift 2\n"
             structure += "                ;;\n"
@@ -513,8 +525,8 @@ def generate_wrapper_structure(context: RunContext[str], language: str, paramete
         structure += f"    $TOOL_COMMAND \\\n"
         for param in parameters[:3]:
             param_name = param.get('name', 'unknown')
-            param_var = param_name.upper()
-            structure += f"        --{param_name.replace('_', '-')} \"${param_var}\" \\\n"
+            param_var = param_name.upper().replace('.', '_').replace('-', '_')
+            structure += f"        --{param_name} \"${param_var}\" \\\n"
         structure += "        # Add more parameters as needed\n"
         structure += "}\n\n"
         
@@ -543,8 +555,9 @@ def generate_wrapper_structure(context: RunContext[str], language: str, paramete
             param_type = param.get('type', 'character')
             description = param.get('description', f'{param_name} parameter')
             r_type = 'character' if param_type in ['Text', 'File', 'Choice'] else 'numeric'
-            
-            structure += f"  make_option(c('--{param_name.replace('_', '-')}'), type='{r_type}',\n"
+            param_var = param_name.replace('.', '_').replace('-', '_')
+
+            structure += f"  make_option(c('--{param_name}'), type='{r_type}',\n"
             structure += f"              help='{description}')"
             if i < min(len(parameters), 3) - 1:
                 structure += ","
@@ -565,7 +578,8 @@ def generate_wrapper_structure(context: RunContext[str], language: str, paramete
         structure += f"    cmd <- paste('{tool_command}',\n"
         for param in parameters[:3]:
             param_name = param.get('name', 'unknown')
-            structure += f"                 '--{param_name.replace('_', '-')}', opt${param_name.replace('-', '_')},\n"
+            param_var = param_name.replace('.', '_').replace('-', '_')
+            structure += f"                 '--{param_name}', opt${param_var},\n"
         structure += "                 collapse=' ')\n"
         structure += "    \n"
         structure += "    result <- system(cmd, intern=TRUE)\n"
@@ -806,11 +820,18 @@ def create_wrapper(context: RunContext[str]) -> str:
     """
     Generate a comprehensive wrapper script for the GenePattern module using planning data.
 
+    IMPORTANT: The scaffold returned by this tool uses the EXACT parameter names from
+    planning_data (e.g. --tumor.bam, --reference, --output.vcf.name). These names are
+    authoritative — they match the manifest pN_name values. When you extend or improve
+    the scaffold you MUST preserve every --flag name exactly as generated. Do NOT rename,
+    add prefixes to, abbreviate, or otherwise modify the parameter names.
+
     Args:
         context: RunContext with dependencies containing tool_info, planning_data, error_report, and attempt
 
     Returns:
-        Complete wrapper script content ready for validation
+        Complete wrapper script content using planning_data parameter names. All --flags
+        in this scaffold must be preserved verbatim in the final wrapper.
     """
     # Extract data from context dependencies
     tool_info = context.deps.get('tool_info', {})
@@ -908,7 +929,7 @@ def create_wrapper(context: RunContext[str]) -> str:
 
     # Add error report context if this is a retry
     if attempt > 1 and error_report:
-        print(f"⚠️  Retry attempt {attempt} due to: {error_report[:100]}")
+        print(f"⚠️  Retry attempt {attempt} due to: {error_report[:2000]}")
 
     print(f"✅ WRAPPER TOOL: create_wrapper completed - generated {len(wrapper_content)} character {wrapper_language} wrapper")
     return wrapper_content
@@ -930,8 +951,13 @@ def _generate_python_wrapper(template: str, tool_name: str, tool_description: st
         default = param.get('default', '')
         description = param.get('description', f'{param_name} parameter')
 
-        # Build argparse argument
-        arg_line = f"    parser.add_argument('--{param_name.replace('_', '-')}'"
+        # Python-safe dest: replace dots AND dashes with underscores
+        # The flag itself keeps the original GenePattern dot-notation (e.g. --input.file)
+        param_var = param_name.replace('.', '_').replace('-', '_')
+
+        # Build argparse argument – flag uses original param_name (dots preserved),
+        # dest is set explicitly so argparse stores the value under a valid Python identifier
+        arg_line = f"    parser.add_argument('--{param_name}', dest='{param_var}'"
 
         if required:
             arg_line += ", required=True"
@@ -974,13 +1000,11 @@ def _generate_python_wrapper(template: str, tool_name: str, tool_description: st
 
         # Generate validation for file parameters
         if param_type == 'File' and 'input' in param_name.lower():
-            param_var = param_name.replace('-', '_')
             validation_lines.append(f"    if args.{param_var} and not os.path.exists(args.{param_var}):")
             validation_lines.append(f"        logging.error(f'Input file does not exist: {{args.{param_var}}}')")
             validation_lines.append(f"        return False")
 
-        # Add to command construction
-        param_var = param_name.replace('-', '_')
+        # Add to command construction – flag in the command uses original dot-notation
         if param_type == 'Boolean':
             command_parts.append(f"    if args.{param_var}:")
             command_parts.append(f"        cmd.append('--{param_name}')")
@@ -1028,8 +1052,14 @@ def _generate_r_wrapper(template: str, tool_name: str, tool_description: str,
         description = param.get('description', f'{param_name} parameter')
         r_type = 'character' if param_type in ['Text', 'File', 'Choice'] else 'numeric'
 
-        # Build option
-        opt_line = f"  make_option(c('--{param_name.replace('_', '-')}'), type='{r_type}'"
+        # R-safe variable name: replace dots AND dashes with underscores.
+        # optparse converts --input.file → opt$input_file automatically, so
+        # we compute param_var the same way to stay consistent.
+        param_var = param_name.replace('.', '_').replace('-', '_')
+
+        # Build option – flag uses original param_name (dots preserved) to match
+        # GenePattern manifest pN_name values exactly.
+        opt_line = f"  make_option(c('--{param_name}'), type='{r_type}'"
 
         if default and param_type != 'Boolean':
             if r_type == 'character':
@@ -1051,7 +1081,6 @@ def _generate_r_wrapper(template: str, tool_name: str, tool_description: str,
 
         # Generate validation
         if param_type == 'File' and 'input' in param_name.lower():
-            param_var = param_name.replace('-', '_')
             validation_lines.append(f"  if (!is.null(opt${param_var}) && !file.exists(opt${param_var})) {{")
             validation_lines.append(f"    cat(paste('Error: Input file does not exist:', opt${param_var}, '\\n'), file = stderr())")
             validation_lines.append(f"    return(FALSE)")
@@ -1070,7 +1099,7 @@ def _generate_r_wrapper(template: str, tool_name: str, tool_description: str,
     execution_lines.append(f"    cmd <- c('{tool_command}')")
     for param in parameters:
         param_name = param.get('name', 'unknown')
-        param_var = param_name.replace('-', '_')
+        param_var = param_name.replace('.', '_').replace('-', '_')
         param_type = param.get('type', 'Text')
 
         if param_type == 'Boolean':
@@ -1126,7 +1155,8 @@ def _generate_bash_wrapper(template: str, tool_name: str, tool_description: str,
         default = param.get('default', '')
         description = param.get('description', f'{param_name} parameter')
 
-        param_var = param_name.upper().replace('-', '_')
+        # Bash variable names cannot contain dots or dashes – replace both with underscores
+        param_var = param_name.upper().replace('.', '_').replace('-', '_')
 
         # Generate default
         if param_type == 'Boolean':
@@ -1136,18 +1166,18 @@ def _generate_bash_wrapper(template: str, tool_name: str, tool_description: str,
         else:
             default_lines.append(f"{param_var}=\"\"")
 
-        # Generate usage line
+        # Generate usage line – flag uses original param_name (dots preserved)
         req_marker = "[REQUIRED]" if required else "[OPTIONAL]"
-        usage_lines.append(f"  --{param_name.replace('_', '-')} VALUE    {description} {req_marker}")
+        usage_lines.append(f"  --{param_name} VALUE    {description} {req_marker}")
 
-        # Generate argument parsing
+        # Generate argument parsing – case pattern uses original param_name (dots preserved)
         if param_type == 'Boolean':
-            parse_lines.append(f"            --{param_name.replace('_', '-')})")
+            parse_lines.append(f"            --{param_name})")
             parse_lines.append(f"                {param_var}=true")
             parse_lines.append(f"                shift")
             parse_lines.append(f"                ;;")
         else:
-            parse_lines.append(f"            --{param_name.replace('_', '-')})")
+            parse_lines.append(f"            --{param_name})")
             parse_lines.append(f"                {param_var}=\"$2\"")
             parse_lines.append(f"                shift 2")
             parse_lines.append(f"                ;;")
@@ -1155,7 +1185,7 @@ def _generate_bash_wrapper(template: str, tool_name: str, tool_description: str,
         # Generate validation
         if required:
             validation_lines.append(f"    if [[ -z \"${{{param_var}}}\" ]]; then")
-            validation_lines.append(f"        echo \"Error: --{param_name.replace('_', '-')} is required\" >&2")
+            validation_lines.append(f"        echo \"Error: --{param_name} is required\" >&2")
             validation_lines.append(f"        return 1")
             validation_lines.append(f"    fi")
 
@@ -1169,13 +1199,14 @@ def _generate_bash_wrapper(template: str, tool_name: str, tool_description: str,
     execution_lines.append(f"    \"{tool_command}\" \\")
     for param in parameters:
         param_name = param.get('name', 'unknown')
-        param_var = param_name.upper().replace('-', '_')
+        param_var = param_name.upper().replace('.', '_').replace('-', '_')
         param_type = param.get('type', 'Text')
 
+        # Flag in the command uses original param_name (dots preserved)
         if param_type == 'Boolean':
-            execution_lines.append(f"        $([[ \"${{{param_var}}}\" == \"true\" ]] && echo \"--{param_name.replace('_', '-')}\") \\")
+            execution_lines.append(f"        $([[ \"${{{param_var}}}\" == \"true\" ]] && echo \"--{param_name}\") \\")
         else:
-            execution_lines.append(f"        $([ -n \"${{{param_var}}}\" ] && echo \"--{param_name.replace('_', '-')} \\\"${{{param_var}}}\\\" \") \\")
+            execution_lines.append(f"        $([ -n \"${{{param_var}}}\" ] && echo \"--{param_name} \\\"${{{param_var}}}\\\" \") \\")
 
     # Remove trailing backslash from last line
     if execution_lines:

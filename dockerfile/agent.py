@@ -46,13 +46,14 @@ CRITICAL PACKAGE VALIDATION RULES:
   before generating the new Dockerfile.
 
 USING THE create_dockerfile TOOL:
-- The create_dockerfile tool now accepts two explicit arguments that you MUST supply:
+- The create_dockerfile tool accepts one explicit argument that you MUST supply:
   * wrapper_source (str): the FULL source code of the wrapper script. The tool will parse
     its import/library statements programmatically to determine the exact pip or R packages
     that need to be installed. Pass an empty string only if no wrapper source is available.
-  * planning_data (dict): the module planning data dictionary with keys such as
-    wrapper_script, parameters, input_file_formats, cpu_cores, memory, docker_image_tag.
-- Passing these arguments allows the tool to produce a Dockerfile that reflects the
+- The tool reads all planning data (wrapper_script, parameters, input_file_formats,
+  cpu_cores, memory, docker_image_tag, etc.) automatically from its context — do NOT
+  attempt to pass a planning_data argument.
+- Passing the wrapper source allows the tool to produce a Dockerfile that reflects the
   wrapper's ACTUAL dependencies rather than guessing.
 - If a specific base Docker image is known (e.g. a tool ships its own official image),
   set one of these keys in planning_data so the tool uses it directly instead of guessing:
@@ -429,15 +430,13 @@ def _infer_pip_packages(imports: list[str]) -> list[str]:
 def create_dockerfile(
     context: RunContext[str],
     wrapper_source: str = "",
-    planning_data: dict = None,
 ) -> str:
     """
     Generate a complete Dockerfile for the GenePattern module.
 
-    The tool now accepts the wrapper source code and planning data as
-    **explicit arguments** so it can parse import statements programmatically
-    and produce a Dockerfile that reflects the wrapper's actual dependencies
-    rather than making assumptions.
+    The tool receives wrapper source code as an explicit argument and reads
+    all planning data automatically from context dependencies (tool_info,
+    planning_data, error_report, attempt).
 
     Args:
         context: RunContext with dependencies containing tool_info, error_report, and attempt.
@@ -455,11 +454,10 @@ def create_dockerfile(
     Returns:
         Complete Dockerfile content ready for validation
     """
-    # Extract data from context dependencies
+    # Extract data from context dependencies — planning_data always comes
+    # from deps so it reflects the corrected wrapper_script name.
     tool_info = context.deps.get('tool_info', {})
-    # Prefer the explicit argument; fall back to context deps for backwards compat
-    if planning_data is None:
-        planning_data = context.deps.get('planning_data', {}) or {}
+    planning_data = context.deps.get('planning_data', {}) or {}
     error_report = context.deps.get('error_report', '')
     attempt = context.deps.get('attempt', 1)
 
@@ -743,7 +741,7 @@ CMD ["/bin/bash"]
 
         # Add retry context if applicable
         if attempt > 1 and error_report:
-            print(f"⚠️  Retry attempt {attempt} - addressing: {error_report[:100]}")
+            print(f"⚠️  Retry attempt {attempt} - addressing: {error_report[:2000]}")
 
         print("✅ DOCKERFILE TOOL: create_dockerfile completed successfully")
         return dockerfile_content

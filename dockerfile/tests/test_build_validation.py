@@ -94,31 +94,43 @@ def run_test(dockerfile_path: str, shared_context: dict) -> List[LintIssue]:
         res = run(cmd, cwd=context_dir)
         
         if res.returncode != 0:
+            # Combine stdout and stderr; docker build mixes them
+            combined_build = (res.stdout + "\n" + res.stderr).strip()
+
+            # Always print the last 50 lines to the console so the user can follow along,
+            # but don't flood the terminal with the full package-install transcript.
+            if combined_build:
+                tail = combined_build.splitlines()[-50:]
+                print("\n--- Docker build output (last 50 lines) ---")
+                print("\n".join(tail))
+                print("--- End build output ---\n")
+
+            # Extract key error lines for the LintIssue context (used by the LLM on retry).
+            build_error_keywords = [
+                'error', 'failed', 'exception',
+                'no such file', 'not found', 'unable to locate',
+                'executor failed', 'exit code',
+                'COPY failed', 'failed to solve',
+            ]
+            key_lines = []
+            for line in combined_build.splitlines():
+                if any(kw in line.lower() for kw in build_error_keywords):
+                    stripped = line.strip()
+                    if stripped and stripped not in key_lines:
+                        key_lines.append(stripped)
+
+            tail_lines = combined_build.splitlines()[-50:]
+            parts = []
+            if key_lines:
+                parts.append("KEY ERRORS:\n" + "\n".join(f"  {l}" for l in key_lines[:20]))
+            parts.append("LAST 50 LINES OF BUILD OUTPUT:\n" + "\n".join(tail_lines))
+            build_summary = "\n\n".join(parts) if parts else "(no output captured)"
+
             issues.append(LintIssue(
                 "ERROR",
                 f"Docker build failed for {dockerfile_path}",
-                f"Build command: {res.cmd}"
+                f"Build command: {res.cmd}\n\n{build_summary}"
             ))
-            
-            # Parse and add specific build errors
-            if res.stderr.strip():
-                # Extract meaningful error from Docker output
-                error_lines = res.stderr.strip().split('\\n')
-                for line in error_lines:
-                    if 'ERROR' in line.upper() or 'failed' in line.lower():
-                        issues.append(LintIssue(
-                            "ERROR",
-                            f"Build error: {line.strip()}"
-                        ))
-                        
-            # If no specific errors found, add full output
-            if len(issues) == 1:  # Only the main error so far
-                full_output = res.stderr.strip() or res.stdout.strip()
-                if full_output:
-                    issues.append(LintIssue(
-                        "ERROR",
-                        f"Full build output: {full_output[:500]}..." if len(full_output) > 500 else full_output
-                    ))
         else:
             # Build succeeded - store state for dependent tests
             shared_context['build_success'] = True

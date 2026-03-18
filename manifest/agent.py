@@ -687,7 +687,7 @@ def create_manifest(context: RunContext[str]) -> Dict[str, Any]:
 
         # Add retry context if applicable
         if attempt > 1 and error_report:
-            print(f"⚠️ Retry attempt {attempt} - previous error: {error_report[:100]}")
+            print(f"⚠️ Retry attempt {attempt} - previous error: {error_report[:2000]}")
 
         # Generate LSID - use from planning_data if available, otherwise generate fallback
         if planning_dict and 'lsid' in planning_dict and planning_dict['lsid']:
