@@ -9,7 +9,7 @@ dashes instead of dots (e.g., ``--input-file``) which causes a mismatch
 between the manifest's commandLine / prefix_when_specified and the
 wrapper's argparse / optparse definitions.
 
-This test catches three classes of mismatch:
+This test catches four classes of problem:
 1. ``prefix_when_specified`` uses dashes where the parameter name has dots.
 2. Inline flags in ``commandLine`` use dashes where the parameter name
    has dots.
@@ -17,6 +17,12 @@ This test catches three classes of mismatch:
    present for the same parameter — this is a bug because GenePattern
    applies ``prefix_when_specified`` automatically at runtime, so an
    inline flag in ``commandLine`` causes the flag to appear twice.
+4. ``prefix_when_specified`` or ``prefix`` does not end with a space (or ``=``).
+   GenePattern concatenates the prefix directly onto the value, so a missing
+   trailing space produces ``--flagvalue`` instead of ``--flag value``.
+   Correct:  p1_prefix_when_specified=--input.file   (trailing space)
+   Correct:  p1_prefix_when_specified=--input.file=  (equals-separated style)
+   Wrong:    p1_prefix_when_specified=--input.file   (no separator — concatenates)
 """
 from __future__ import annotations
 
@@ -60,7 +66,10 @@ def _extract_inline_flag(command_line: str, param_name: str) -> Optional[str]:
 def run_test(lines: List[str]) -> List[LintIssue]:
     """
     Test that prefix_when_specified values and commandLine inline flags
-    use dots (matching parameter names) rather than dashes.
+    use dots (matching parameter names) rather than dashes, that
+    prefix_when_specified is not duplicated as an inline commandLine flag,
+    and that prefix / prefix_when_specified end with a space or '=' so
+    GenePattern separates the flag from the value correctly.
 
     Args:
         lines: List of lines from the manifest file
@@ -69,7 +78,9 @@ def run_test(lines: List[str]) -> List[LintIssue]:
         List of LintIssue objects for any consistency violations
     """
     issues: List[LintIssue] = []
-    kv: Dict[str, Tuple[str, int, str]] = {}  # key -> (value, line_no, line_text)
+    # Store raw (unstripped) value so trailing spaces are preserved.
+    # Format: key -> (raw_value, line_no, line_text)
+    kv: Dict[str, Tuple[str, int, str]] = {}
 
     for idx, raw_line in enumerate(lines, start=1):
         line = raw_line.rstrip("\n")
@@ -82,12 +93,12 @@ def run_test(lines: List[str]) -> List[LintIssue]:
 
         key, value = line.split("=", 1)
         key = key.strip()
-        value = value.strip()
+        # Keep raw value (do NOT strip) so trailing spaces are visible.
         if key:
             kv[key] = (value, idx, line)
 
-    # Extract commandLine
-    command_line = kv.get("commandLine", ("", 0, ""))[0]
+    # Extract commandLine (stripped is fine here)
+    command_line = kv.get("commandLine", ("", 0, ""))[0].strip()
 
     # Collect parameter info
     params: Dict[int, Dict[str, Tuple[str, int, str]]] = {}
@@ -102,21 +113,17 @@ def run_test(lines: List[str]) -> List[LintIssue]:
         attrs = params[param_num]
         name_val = attrs.get("name")
         prefix_val = attrs.get("prefix_when_specified")
+        prefix_always_val = attrs.get("prefix")
 
         if name_val is None:
             continue
 
-        param_name = name_val[0]
+        param_name = name_val[0].strip()
 
         # --- Check 3: prefix_when_specified duplicated as inline flag ------
-        # GenePattern applies prefix_when_specified at runtime.  If the
-        # commandLine template also embeds a flag before <param_name>, the
-        # flag will appear twice when the server substitutes the parameter.
-        # The commandLine should use bare <param_name> placeholders and
-        # let prefix_when_specified supply the flag.
         if command_line and prefix_val is not None:
-            prefix = prefix_val[0].strip()
-            if prefix:
+            prefix_stripped = prefix_val[0].strip()
+            if prefix_stripped:
                 inline_flag = _extract_inline_flag(command_line, param_name)
                 if inline_flag is not None:
                     cmd_line_no = kv.get("commandLine", ("", 0, ""))[1]
@@ -124,7 +131,7 @@ def run_test(lines: List[str]) -> List[LintIssue]:
                     issues.append(LintIssue(
                         "ERROR",
                         f"Parameter p{param_num} '{param_name}': "
-                        f"prefix_when_specified is '{prefix}' but the "
+                        f"prefix_when_specified is '{prefix_stripped}' but the "
                         f"commandLine also has inline flag '{inline_flag}' "
                         f"before <{param_name}>. This will produce a "
                         f"duplicated flag at runtime. Remove the inline "
@@ -134,18 +141,47 @@ def run_test(lines: List[str]) -> List[LintIssue]:
                         cmd_line_text,
                     ))
 
+        # --- Check 4: prefix / prefix_when_specified must end with space or = ---
+        # GenePattern concatenates the prefix directly onto the substituted value.
+        # Without a trailing space or '=' the flag and value are merged into one
+        # token (e.g. '--input.filedata.bam' instead of '--input.file data.bam').
+        for attr_name, entry in (
+            ("prefix_when_specified", prefix_val),
+            ("prefix", prefix_always_val),
+        ):
+            if entry is None:
+                continue
+            raw_value = entry[0]          # NOT stripped — trailing space matters
+            stripped_value = raw_value.strip()
+            if not stripped_value:
+                continue                  # empty prefix is fine
+            # A well-formed prefix ends with a space OR with '='
+            if not (raw_value.endswith(" ") or stripped_value.endswith("=")):
+                issues.append(LintIssue(
+                    "ERROR",
+                    f"Parameter p{param_num} '{param_name}': "
+                    f"p{param_num}_{attr_name} is '{stripped_value}' but does not end "
+                    f"with a space or '='. GenePattern concatenates the prefix "
+                    f"directly onto the value, so the flag and value will be "
+                    f"merged into a single token at runtime (e.g. "
+                    f"'{stripped_value}<value>' instead of '{stripped_value} <value>'). "
+                    f"Add a trailing space: '{stripped_value} ' or use "
+                    f"equals-style: '{stripped_value}='.",
+                    entry[1],
+                    entry[2],
+                ))
+
         # Checks 1 and 2 only apply to params whose names contain dots
         if "." not in param_name:
             continue
 
         # --- Check 1: prefix_when_specified uses dashes instead of dots ---
         if prefix_val is not None:
-            prefix = prefix_val[0]
+            prefix = prefix_val[0].strip()
             prefix_line_no = prefix_val[1]
             prefix_line_text = prefix_val[2]
 
             if prefix:
-                # Expected: --input.file   Wrong: --input-file
                 expected_prefix = f"--{param_name}"
                 dashed_prefix = f"--{_dots_to_dashes(param_name)}"
 
