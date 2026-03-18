@@ -359,14 +359,16 @@ def _build_from_manifest(
                     if ext.lower() in ext_to_item:
                         item = ext_to_item[ext.lower()]
                         break
-            # Only fall back to positional matching for required params,
-            # or optional params with NO format restriction.  Optional params
-            # with a specific format (e.g. .pkl) that didn't match any data
-            # should be stripped rather than getting an unrelated file.
-            if item is None and positional_file_idx < len(positional_files):
-                if is_req or not has_format_restriction:
-                    item = positional_files[positional_file_idx]
-                    positional_file_idx += 1
+            # Positional fallback: only used for *required* FILE params that
+            # could not be matched by extension.  Optional FILE params are
+            # never assigned a positionally-matched file — if no extension
+            # match was found they are stripped from the command instead.
+            # This prevents an unrelated file (e.g. a FASTA) from being
+            # passed to an optional VCF or PON parameter, which would cause
+            # the tool to crash during the runtime validation test.
+            if item is None and is_req and positional_file_idx < len(positional_files):
+                item = positional_files[positional_file_idx]
+                positional_file_idx += 1
 
             if item is None or not item.has_local:
                 if _is_required(param):

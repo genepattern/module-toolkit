@@ -717,7 +717,7 @@ CMD ["/bin/bash"]
 
         # Add retry context if applicable
         if attempt > 1 and error_report:
-            print(f"⚠️  Retry attempt {attempt} - addressing: {error_report[:100]}")
+            print(f"⚠️  Retry attempt {attempt} - addressing: {error_report[:2000]}")
 
         print("✅ DOCKERFILE TOOL: create_dockerfile completed successfully")
         return dockerfile_content

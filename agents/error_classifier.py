@@ -101,7 +101,36 @@ _RULES: List[tuple] = [
         "The wrapper should be regenerated with valid syntax.",
     ),
 
+    # -- Python version compatibility: list[str] not subscriptable on Python <3.9 --
+    (
+        re.compile(
+            r"TypeError:\s*'type' object is not subscriptable",
+            re.IGNORECASE,
+        ),
+        "wrapper",
+        "Wrapper uses generic type annotations (e.g. list[str], dict[str, int]) "
+        "that require Python 3.9+. The wrapper should be regenerated to use "
+        "'from __future__ import annotations' at the top of the file, or replace "
+        "bare built-in generics with typing equivalents (List[str], Dict[str, int]) "
+        "for compatibility with Python 3.8.",
+    ),
+
     # -- Python / R argparse / optparse CLI mismatches -----------------------
+    # Manifest commandLine passes GenePattern dot-notation flags (--foo.bar) that
+    # the wrapper does not recognise → the manifest parameter names or the wrapper
+    # add_argument flags must be aligned.  Escalate to manifest first so the
+    # commandLine / pN_name entries are fixed to match what the wrapper declares.
+    (
+        re.compile(
+            r"unrecognized arguments?:\s*((?:--[\w.]+\s*)+)",
+            re.IGNORECASE,
+        ),
+        "manifest",
+        "The manifest commandLine passes arguments ({match}) that the wrapper does "
+        "not recognise. The manifest parameter names and/or the commandLine template "
+        "must be updated to match the exact flag names declared in the wrapper's "
+        "argparse add_argument() calls.",
+    ),
     (
         re.compile(
             r"the following arguments are required:\s*(.+)",
@@ -237,6 +266,20 @@ _RULES: List[tuple] = [
         "parameter '{match}'. The commandLine template should use a bare "
         "<{match}> placeholder — the prefix is supplied automatically by "
         "prefix_when_specified. Remove the duplicated flag from commandLine.",
+    ),
+    # Wrapper-consistency linter: manifest declares a parameter name that has
+    # no matching add_argument() flag in the wrapper → regenerate wrapper to
+    # add the missing flags, or rename the manifest parameter to match.
+    (
+        re.compile(
+            r"Manifest parameter ['\"]?([^'\"]+)['\"]? has no matching flag in the wrapper",
+            re.IGNORECASE,
+        ),
+        "wrapper",
+        "Manifest parameter '{match}' has no matching add_argument() flag in "
+        "the wrapper script. Either add '--{match}' to the wrapper's argparse "
+        "definitions, or rename the manifest parameter to match an existing "
+        "wrapper flag.",
     ),
     (
         re.compile(

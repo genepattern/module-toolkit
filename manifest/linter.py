@@ -77,11 +77,19 @@ def parse_args(argv: List[str]) -> argparse.Namespace:
 Examples:
   %(prog)s /path/to/manifest               # Validate specific manifest file
   %(prog)s /path/to/module/directory       # Find and validate manifest in directory
+  %(prog)s /path/to/manifest --wrapper /path/to/wrapper.py  # Also check wrapper consistency
 """
     )
     p.add_argument(
-        "path", 
+        "path",
         help="Path to manifest file or directory containing manifest file"
+    )
+    p.add_argument(
+        "--wrapper",
+        dest="wrapper_path",
+        default=None,
+        metavar="WRAPPER",
+        help="Path to the wrapper script for parameter consistency checking (optional)"
     )
     return p.parse_args(argv)
 
@@ -126,17 +134,22 @@ def discover_tests() -> List[str]:
     return sorted(test_files)
 
 
-def run_modular_tests(manifest_path: str) -> Tuple[bool, List[LintIssue]]:
+def run_modular_tests(manifest_path: str, context: dict = None) -> Tuple[bool, List[LintIssue]]:
     """Run all discovered test modules against the manifest.
-    
+
     Args:
         manifest_path: Path to the manifest file to test
-        
+        context: Optional shared context dict passed to each test's run_test().
+                 Keys may include 'wrapper_path' for consistency checks.
+
     Returns:
         Tuple of (all_tests_passed, list_of_all_issues)
     """
+    if context is None:
+        context = {}
+
     all_issues: List[LintIssue] = []
-    
+
     # Basic file validation
     if not os.path.exists(manifest_path):
         all_issues.append(LintIssue("ERROR", f"File does not exist: {manifest_path}", None, None))
@@ -144,7 +157,7 @@ def run_modular_tests(manifest_path: str) -> Tuple[bool, List[LintIssue]]:
     if not os.path.isfile(manifest_path):
         all_issues.append(LintIssue("ERROR", f"Not a regular file: {manifest_path}", None, None))
         return False, all_issues
-    
+
     # Filename validation
     base = os.path.basename(manifest_path)
     if base != "manifest":
@@ -154,62 +167,72 @@ def run_modular_tests(manifest_path: str) -> Tuple[bool, List[LintIssue]]:
             None,
             None,
         ))
-    
+
     # Read the manifest file
     try:
         with open(manifest_path, "r", encoding="utf-8") as f:
             lines = f.readlines()
     except UnicodeDecodeError:
-        # Java .properties are ISO-8859-1 by spec; try latin-1
         with open(manifest_path, "r", encoding="latin-1") as f:
             lines = f.readlines()
     except FileNotFoundError:
         all_issues.append(LintIssue("ERROR", f"File not found: {manifest_path}", None, None))
         return False, all_issues
-    
+
     # Discover and run tests
     test_files = discover_tests()
     if not test_files:
         all_issues.append(LintIssue(
-            "WARNING", 
-            "No test modules found in tests/ directory", 
-            None, 
+            "WARNING",
+            "No test modules found in tests/ directory",
+            None,
             None
         ))
         return True, all_issues
-    
+
     tests_run = 0
     for test_file in test_files:
         try:
-            # Load the test module dynamically
             spec = importlib.util.spec_from_file_location("test_module", test_file)
             if spec is None or spec.loader is None:
                 continue
-                
+
             test_module = importlib.util.module_from_spec(spec)
             spec.loader.exec_module(test_module)
-            
-            # Run the test if it has the required function
+
             if hasattr(test_module, "run_test"):
-                test_issues = test_module.run_test(lines)
+                import inspect
+                sig = inspect.signature(test_module.run_test)
+                params = list(sig.parameters.keys())
+                # Call with context if the test accepts it, otherwise fall back to
+                # the legacy (lines,) signature for backward compatibility.
+                if len(params) >= 2:
+                    test_issues = test_module.run_test(lines, context)
+                else:
+                    test_issues = test_module.run_test(lines)
                 all_issues.extend(test_issues)
                 tests_run += 1
-                
-                # Add test info for verbose output
+
                 test_name = os.path.basename(test_file).replace('.py', '').replace('_', ' ').title()
-                if test_issues:
+                error_count = sum(1 for i in test_issues if i.severity == "ERROR")
+                warning_count = sum(1 for i in test_issues if i.severity == "WARNING")
+                if error_count > 0:
+                    print(f"  Test '{test_name}': {error_count} error(s) found")
+                elif warning_count > 0:
+                    print(f"  Test '{test_name}': {warning_count} warning(s) found")
+                elif test_issues:
                     print(f"  Test '{test_name}': {len(test_issues)} issue(s) found")
                 else:
                     print(f"  Test '{test_name}': PASSED")
-            
+
         except Exception as e:
             all_issues.append(LintIssue(
-                "ERROR", 
-                f"Failed to run test {os.path.basename(test_file)}: {str(e)}", 
-                None, 
+                "ERROR",
+                f"Failed to run test {os.path.basename(test_file)}: {str(e)}",
+                None,
                 None
             ))
-    
+
     print(f"\nRan {tests_run} test module(s)")
     passed = not any(iss.severity == "ERROR" for iss in all_issues)
     return passed, all_issues
@@ -235,10 +258,13 @@ def main(argv: List[str]) -> int:
             print(f"ERROR: File or directory does not exist: '{args.path}'")
         return 1
     
-    # Run modular tests (this is now the only validation method)
+    context = {}
+    if args.wrapper_path:
+        context["wrapper_path"] = args.wrapper_path
+
     print(f"Running modular tests on manifest: {manifest_path}")
-    passed, issues = run_modular_tests(manifest_path)
-    
+    passed, issues = run_modular_tests(manifest_path, context)
+
     # Output results
     if passed:
         print(f"\nPASS: Manifest '{manifest_path}' passed all validation checks.")
