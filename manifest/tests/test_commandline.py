@@ -3,10 +3,21 @@
 Test for command line field validation.
 
 This test ensures that the commandLine field is present and non-empty,
-and checks for common issues in command line syntax.
+and checks for common issues in command line syntax including:
+- Empty commandLine
+- Missing parameter references
+- Missing <libdir> prefix before wrapper scripts
+
+The <libdir> substitution is required so GenePattern can locate the
+wrapper script inside the module's installation directory at runtime.
+
+Good:  python <libdir>wrapper.py ...
+Good:  Rscript <libdir>wrapper.R ...
+Bad:   python wrapper.py ...       (bare script name — will fail at runtime)
 """
 from __future__ import annotations
 
+import re
 import sys
 import os
 from typing import List
@@ -14,6 +25,23 @@ from typing import List
 # Add parent directory to path for imports
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 from linter import LintIssue
+
+# Script extensions/invocations that indicate a wrapper script reference
+_SCRIPT_INVOCATION_RE = re.compile(
+    r"""
+    (?:
+        python\s+        |   # python  wrapper.py
+        Rscript\s+       |   # Rscript wrapper.R
+        bash\s+          |   # bash    wrapper.sh
+        perl\s+          |   # perl    wrapper.pl
+        ruby\s+              # ruby    wrapper.rb
+    )
+    (?!<libdir>)             # NOT already prefixed with <libdir>
+    ([\w./\\-]+              # capture the bare script filename
+     \.(?:py|R|sh|pl|rb|r))  # that has a recognised script extension
+    """,
+    re.VERBOSE,
+)
 
 
 def run_test(lines: List[str]) -> List[LintIssue]:
@@ -80,6 +108,25 @@ def run_test(lines: List[str]) -> List[LintIssue]:
                 issues.append(LintIssue(
                     "WARNING",
                     "commandLine does not contain any parameter references (<param.name>) or spaces. This may be incorrect.",
+                    commandline_line_no,
+                    commandline_line_text,
+                ))
+
+            # Check that wrapper scripts are referenced with <libdir> prefix.
+            # A bare script name (e.g. "python wrapper.py") will fail at runtime
+            # because GenePattern won't know where the script lives.
+            # The correct form is "python <libdir>wrapper.py".
+            m = _SCRIPT_INVOCATION_RE.search(commandline_value)
+            if m:
+                bare_script = m.group(1)
+                issues.append(LintIssue(
+                    "ERROR",
+                    (
+                        f"commandLine references wrapper script '{bare_script}' without the "
+                        f"<libdir> substitution. GenePattern cannot locate the script at runtime. "
+                        f"Use '<libdir>{bare_script}' instead "
+                        f"(e.g. 'python <libdir>{bare_script} ...')."
+                    ),
                     commandline_line_no,
                     commandline_line_text,
                 ))

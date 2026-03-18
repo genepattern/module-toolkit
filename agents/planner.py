@@ -94,11 +94,14 @@ Command line format rules:
 - CRITICAL: Inline flags in the command line MUST use dots matching the parameter names.
   * CORRECT: "--input.file <input.file>"
   * WRONG:   "--input-file <input.file>"  (dashes instead of dots)
+- CRITICAL: The wrapper script MUST always be prefixed with <libdir> so GenePattern can locate it.
+  * CORRECT: "python <libdir>wrapper.py --input.file <input.file>"
+  * WRONG:   "python wrapper.py --input.file <input.file>"  (missing <libdir>)
 - Use the generate_command_line tool to ensure all parameters are included correctly
 - Use the validate_command_line tool to verify the command line includes all parameters
 
 Example with 3 parameters (input.file, output.format, threads):
-  command_line: "python wrapper.py --input.file <input.file> --format <output.format> --threads <threads>"
+  command_line: "python <libdir>wrapper.py --input.file <input.file> --format <output.format> --threads <threads>"
 
 **Planning Methodology:**
 1. Research the tool thoroughly using available resources
@@ -168,7 +171,7 @@ def create_structured_plan(context: RunContext[ModulePlan], tool_name: str, rese
         lsid="urn:lsid:broad.mit.edu:cancer.software.genepattern.module.generated:00000:1",
         plan="Detailed planning findings will be compiled into a comprehensive plan",
         wrapper_script=f"{tool_name.lower()}_wrapper.py",
-        command_line=f"python {tool_name.lower()}_wrapper.py --help",
+        command_line=f"python <libdir>{tool_name.lower()}_wrapper.py --help",
         parameters=[],
         docker_image_tag=f"genepattern/{tool_name.lower()}:1"
     )
@@ -982,18 +985,25 @@ def validate_command_line(context: RunContext[ModulePlan], command_line: str, pa
         else:
             missing_params.append(param_name)
 
+    # Check that <libdir> is present before the wrapper script
+    libdir_missing = wrapper_script in command_line and f"<libdir>{wrapper_script}" not in command_line
+
     # Generate report
-    if not missing_params:
+    if not missing_params and not libdir_missing:
         report += "✅ **Status: VALID**\n\n"
         report += f"Command line includes all {len(param_names)} parameters.\n\n"
     else:
-        report += "❌ **Status: INVALID - MISSING PARAMETERS**\n\n"
-        report += f"**Missing Parameters ({len(missing_params)}):**\n"
-        for param in missing_params:
-            info = param_info.get(param, {})
-            prefix = info.get('prefix', '')
-            report += f"  - {param} (prefix: '{prefix}')\n"
-        report += "\n"
+        if libdir_missing:
+            report += "❌ **Status: INVALID - MISSING <libdir> PREFIX**\n\n"
+            report += f"The wrapper script '{wrapper_script}' must be referenced as '<libdir>{wrapper_script}' so GenePattern can locate it.\n\n"
+        if missing_params:
+            report += "❌ **Status: INVALID - MISSING PARAMETERS**\n\n"
+            report += f"**Missing Parameters ({len(missing_params)}):**\n"
+            for param in missing_params:
+                info = param_info.get(param, {})
+                prefix = info.get('prefix', '')
+                report += f"  - {param} (prefix: '{prefix}')\n"
+            report += "\n"
 
         report += f"**Present Parameters ({len(present_params)}):**\n"
         for param in present_params:
@@ -1005,7 +1015,15 @@ def validate_command_line(context: RunContext[ModulePlan], command_line: str, pa
     report += "```\n"
 
     # Build correct command line with all parameters
-    correct_cmd_parts = [f"python {wrapper_script}"]
+    # IMPORTANT: wrapper script must be prefixed with <libdir> so GenePattern can locate it
+    if wrapper_script.endswith('.py'):
+        correct_cmd_parts = [f"python <libdir>{wrapper_script}"]
+    elif wrapper_script.endswith('.R'):
+        correct_cmd_parts = [f"Rscript <libdir>{wrapper_script}"]
+    elif wrapper_script.endswith('.sh'):
+        correct_cmd_parts = [f"bash <libdir>{wrapper_script}"]
+    else:
+        correct_cmd_parts = [f"<libdir>{wrapper_script}"]
 
     for param_name in param_names:
         info = param_info.get(param_name, {})
@@ -1033,10 +1051,12 @@ def validate_command_line(context: RunContext[ModulePlan], command_line: str, pa
     report += "- Optional parameters are optional for the USER, not for the command line\n"
     report += "- If user doesn't fill an optional parameter, it's passed as empty string\n"
     report += "- Parameter placeholders use format: <parameter.name>\n"
+    report += "- CRITICAL: The wrapper script MUST be prefixed with <libdir> (e.g., python <libdir>wrapper.py)\n"
     report += "- When prefix_only_if_value=True, the prefix is added by GenePattern only when value is provided\n"
     report += "- When prefix_only_if_value=False, always include 'prefix <value>' in command line\n"
 
-    print(f"✅ PLANNER TOOL: validate_command_line completed - {'VALID' if not missing_params else f'MISSING {len(missing_params)} PARAMS'}")
+    is_valid = not missing_params and not libdir_missing
+    print(f"✅ PLANNER TOOL: validate_command_line completed - {'VALID' if is_valid else f'INVALID ({len(missing_params)} missing params, libdir_missing={libdir_missing})'}")
     return report
 
 
@@ -1060,17 +1080,17 @@ def generate_command_line(context: RunContext[ModulePlan], wrapper_script: str, 
     print(f"🔧 PLANNER TOOL: Running generate_command_line for {wrapper_script} with {len(parameters)} parameters")
 
     if not parameters:
-        return f"python {wrapper_script}"
+        return f"python <libdir>{wrapper_script}"
 
     # Determine script invocation based on extension
     if wrapper_script.endswith('.py'):
-        cmd_parts = [f"python {wrapper_script}"]
+        cmd_parts = [f"python <libdir>{wrapper_script}"]
     elif wrapper_script.endswith('.R'):
-        cmd_parts = [f"Rscript {wrapper_script}"]
+        cmd_parts = [f"Rscript <libdir>{wrapper_script}"]
     elif wrapper_script.endswith('.sh'):
-        cmd_parts = [f"bash {wrapper_script}"]
+        cmd_parts = [f"bash <libdir>{wrapper_script}"]
     else:
-        cmd_parts = [wrapper_script]
+        cmd_parts = [f"<libdir>{wrapper_script}"]
 
     # Add each parameter to the command line
     for param in parameters:
