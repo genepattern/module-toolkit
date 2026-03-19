@@ -57,14 +57,15 @@ class LintIssue:
         return f"{self.severity}: {self.message}{context_info}"
 
 
-def run(cmd: list[str], cwd: Optional[str] = None, env: Optional[dict] = None) -> CmdResult:
+def run(cmd: list[str], cwd: Optional[str] = None, env: Optional[dict] = None, timeout: int = 600) -> CmdResult:
     """Execute a command and return the result.
-    
+
     Args:
         cmd: Command and arguments as a list
         cwd: Working directory for the command
         env: Environment variables for the command
-        
+        timeout: Maximum seconds to wait (default 600). Returns returncode 124 on expiry.
+
     Returns:
         CmdResult with execution details
     """
@@ -76,12 +77,23 @@ def run(cmd: list[str], cwd: Optional[str] = None, env: Optional[dict] = None) -
         stderr=subprocess.PIPE,
         text=True,
     )
-    out, err = proc.communicate()
+    try:
+        out, err = proc.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        out, err = proc.communicate()
+        return CmdResult(
+            cmd=" ".join(shlex.quote(c) for c in cmd),
+            cwd=os.getcwd() if cwd is None else cwd,
+            returncode=124,
+            stdout=out,
+            stderr=err + f"\nTIMED OUT after {timeout}s",
+        )
     return CmdResult(
-        cmd=" ".join(shlex.quote(c) for c in cmd), 
-        cwd=os.getcwd() if cwd is None else cwd, 
-        returncode=proc.returncode, 
-        stdout=out, 
+        cmd=" ".join(shlex.quote(c) for c in cmd),
+        cwd=os.getcwd() if cwd is None else cwd,
+        returncode=proc.returncode,
+        stdout=out,
         stderr=err
     )
 
@@ -279,6 +291,12 @@ Examples:
         metavar="HOST:CONTAINER",
         help="Bind-mount passed to 'docker run' during runtime testing (repeatable, e.g. /data/sample.bam:/data/sample.bam)"
     )
+    p.add_argument(
+        "--platform",
+        default=None,
+        metavar="PLATFORM",
+        help="Docker --platform value for build/run (e.g. linux/amd64). Auto-detected when omitted."
+    )
     return p.parse_args(argv)
 
 
@@ -304,10 +322,11 @@ def main(argv: list[str]) -> int:
     
     # Prepare test context - pass all CLI arguments to tests
     test_kwargs = {
-        'tag': args.tag,      # May be None
-        'command': args.cmd,  # May be None
+        'tag': args.tag,          # May be None
+        'command': args.cmd,      # May be None
         'cleanup': args.cleanup,
         'volumes': args.volumes,  # List of "host:container" strings (may be empty)
+        'platform': args.platform,  # May be None (auto-detected by build test)
     }
     
     # Run modular tests

@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import sys
 import os
-from typing import List
+from typing import List, Optional
 from dataclasses import dataclass
 
 # Add parent directory to path for imports  
@@ -114,7 +114,7 @@ def _detect_wrapper_help_command(command: str) -> str | None:
     return None
 
 
-def _run_wrapper_help_check(tag: str, volume_flags: List[str], help_cmd: str) -> List[LintIssue]:
+def _run_wrapper_help_check(tag: str, volume_flags: List[str], help_cmd: str, platform: Optional[str] = None) -> List[LintIssue]:
     """Run ``help_cmd`` inside the container as a cheap import/syntax check.
 
     A non-zero exit is treated as an ERROR only when the failure output
@@ -124,8 +124,10 @@ def _run_wrapper_help_check(tag: str, volume_flags: List[str], help_cmd: str) ->
     """
     issues: List[LintIssue] = []
 
+    platform_flags = ["--platform", platform] if platform else []
     cmd = [
         "docker", "run", "--rm",
+        *platform_flags,
         *volume_flags,
         "--entrypoint", "sh", tag, "-lc", help_cmd,
     ]
@@ -255,9 +257,11 @@ def run_test(dockerfile_path: str, shared_context: dict) -> List[LintIssue]:
     # Python, R, and Perl wrappers; languages without a --help convention are #
     # silently skipped.                                                        #
     # ---------------------------------------------------------------------- #
+    platform = shared_context.get('platform')
+
     help_cmd = _detect_wrapper_help_command(command)
     if help_cmd:
-        help_issues = _run_wrapper_help_check(tag, volume_flags, help_cmd)
+        help_issues = _run_wrapper_help_check(tag, volume_flags, help_cmd, platform=platform)
         issues.extend(help_issues)
         # If the pre-check found a hard import error, abort — no point running
         # the full command when the wrapper can't even be imported.
@@ -269,12 +273,14 @@ def run_test(dockerfile_path: str, shared_context: dict) -> List[LintIssue]:
             ))
             return issues
 
+    platform_flags = ["--platform", platform] if platform else []
     cmd = [
         "docker", "run", "--rm",
+        *platform_flags,
         *volume_flags,
         "--entrypoint", "sh", tag, "-lc", command,
     ]
-    
+
     try:
         res = run(cmd)
         

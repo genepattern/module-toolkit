@@ -7,10 +7,14 @@ into a Docker image.
 """
 from __future__ import annotations
 
+import json
+import platform as _platform
+import re
+import subprocess
 import sys
 import os
 import time
-from typing import List
+from typing import List, Optional
 from dataclasses import dataclass
 
 # Add parent directory to path for imports  
@@ -53,6 +57,57 @@ class LintIssue:
         return f"{self.severity}: {self.message}{context_info}"
 
 
+def _parse_from_image(dockerfile_path: str) -> Optional[str]:
+    """Return the base image name from the first FROM instruction."""
+    try:
+        with open(dockerfile_path) as f:
+            for line in f:
+                m = re.match(r'^\s*FROM\s+(?:--platform=\S+\s+)?(\S+)', line, re.IGNORECASE)
+                if m and m.group(1).lower() != 'scratch':
+                    return m.group(1)
+    except Exception:
+        pass
+    return None
+
+
+def _detect_required_platform(from_image: str) -> Optional[str]:
+    """Return the --platform value needed to build from_image on this host, or None.
+
+    Uses `docker manifest inspect` to find what platforms the image supports.
+    If the host is ARM64 and the image only offers linux/amd64, returns 'linux/amd64'
+    so Docker doesn't hang trying to emulate the wrong architecture silently.
+    Falls back gracefully if manifest inspection fails.
+    """
+    machine = _platform.machine().lower()
+    host_is_arm = 'arm' in machine or 'aarch' in machine
+    host_platform = 'linux/arm64' if host_is_arm else 'linux/amd64'
+
+    try:
+        result = subprocess.run(
+            ['docker', 'manifest', 'inspect', from_image],
+            capture_output=True, text=True, timeout=30,
+        )
+        if result.returncode != 0:
+            return None
+        manifest = json.loads(result.stdout)
+        supported = set()
+        for entry in manifest.get('manifests', []):
+            p = entry.get('platform', {})
+            arch = p.get('architecture', '')
+            os_ = p.get('os', 'linux')
+            if arch == 'amd64':
+                supported.add('linux/amd64')
+            elif arch in ('arm64', 'arm'):
+                supported.add('linux/arm64')
+        if not supported:
+            return None
+        if host_platform not in supported and 'linux/amd64' in supported:
+            return 'linux/amd64'
+    except Exception:
+        pass
+    return None
+
+
 def run_test(dockerfile_path: str, shared_context: dict) -> List[LintIssue]:
     """
     Test Docker image build validation.
@@ -82,14 +137,23 @@ def run_test(dockerfile_path: str, shared_context: dict) -> List[LintIssue]:
     # Store tag for potential cleanup or subsequent tests
     # This is important for runtime validation which needs the built image tag
     
+    # Determine --platform: use explicit CLI value, otherwise auto-detect
+    platform = shared_context.get('platform')
+    if not platform:
+        from_image = _parse_from_image(dockerfile_path)
+        if from_image:
+            platform = _detect_required_platform(from_image)
+            if platform:
+                print(f"  Auto-detected platform mismatch: building with --platform {platform} for {from_image}")
+    if platform:
+        shared_context['platform'] = platform  # pass to runtime test
+
     # Build command
-    cmd = [
-        "docker", "build",
-        "-t", tag,
-        "-f", dockerfile_path,
-        context_dir,
-    ]
-    
+    cmd = ["docker", "build", "-t", tag, "-f", dockerfile_path]
+    if platform:
+        cmd += ["--platform", platform]
+    cmd.append(context_dir)
+
     try:
         res = run(cmd, cwd=context_dir)
         
