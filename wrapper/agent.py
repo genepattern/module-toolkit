@@ -42,15 +42,20 @@ You MUST generate wrapper scripts in the appropriate language based on the tool 
 - Simple command-line tool with straightforward parameters
 - The tool is shell-based or has minimal parameter complexity
 - Low overhead and fast execution is priority
+- **The underlying tool is Java/JVM-based (Java, Scala, Groovy, Kotlin)** — bash is always
+  the correct wrapper language for JVM tools. The bash script invokes the tool via its
+  command-line interface (e.g. `gatk Mutect2 ...`, `java -jar picard.jar ...`).
+  NEVER write a Java source-file wrapper for a Java tool.
 
 **Other Languages** - Consider when:
-- Java/Scala tools: Java wrapper for native integration
 - Perl tools: Perl wrapper for legacy bioinformatics tools
 - Julia tools: Julia wrapper for performance-critical scientific computing
 
 LANGUAGE SELECTION PRIORITY:
 1. Match the tool's native language when possible (R tool → R wrapper, Python tool → Python wrapper)
-2. For compiled tools, prefer Bash for simplicity unless complexity demands Python
+2. **Java/JVM tools → bash wrapper** (not Java, not Python)
+3. For other compiled tools, prefer Bash for simplicity unless complexity demands Python
+4. The prompt will include a "WRAPPER LANGUAGE IS FIXED" section — always follow it exactly.
 
 Key requirements for GenePattern wrapper scripts:
 - Create clean, maintainable code that handles parameter passing efficiently
