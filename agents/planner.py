@@ -80,6 +80,15 @@ as the `docker_image_tag` field in the ModulePlan. Do NOT replace it with a norm
   - Module "DESeq2" version 2.1 -> docker_image_tag: "genepattern/deseq2:2.1"
   - Module "STAR-Fusion" version 3 -> docker_image_tag: "genepattern/starfusion:3"
 
+**Wrapper Script Language Rules (CRITICAL):**
+The `wrapper_script` field name and extension determine the wrapper language. Follow these rules:
+- Python tools → `<toolname>_wrapper.py` (invoked as `python <libdir><script>`)
+- R tools → `<toolname>_wrapper.R` (invoked as `Rscript <libdir><script>`)
+- Bash/shell tools → `<toolname>_wrapper.sh` (invoked as `bash <libdir><script>`)
+- **Java / Scala / Groovy / Kotlin tools → `<toolname>_wrapper.sh`** (bash script that calls
+  the tool via its CLI, e.g. `gatk`, `java -jar`). NEVER use a `.java` or `.py` extension for
+  a Java tool. The wrapper language is bash, not Java.
+
 **CRITICAL: Command Line Requirements**
 The `command_line` field MUST include ALL parameters defined in the `parameters` list, even if those 
 parameters are marked as optional. This is because:
@@ -159,6 +168,10 @@ def create_structured_plan(context: RunContext[ModulePlan], tool_name: str, rese
     # The LLM will analyze all available information and return a properly structured ModulePlan object
 
     # Placeholder return - the LLM will replace this with actual structured data
+    # Determine wrapper extension from tool_name context (best-effort heuristic for placeholder only)
+    _jvm_placeholder = any(kw in (research_data or '').lower() for kw in ['java', 'gatk', 'picard', 'scala', 'groovy'])
+    _placeholder_ext = '.sh' if _jvm_placeholder else '.py'
+    _placeholder_runner = 'bash' if _jvm_placeholder else 'python'
     return ModulePlan(
         module_name=tool_name,
         description="Comprehensive plan in progress - this will be populated by the LLM",
@@ -170,8 +183,8 @@ def create_structured_plan(context: RunContext[ModulePlan], tool_name: str, rese
         memory="1GB",
         lsid="urn:lsid:broad.mit.edu:cancer.software.genepattern.module.generated:00000:1",
         plan="Detailed planning findings will be compiled into a comprehensive plan",
-        wrapper_script=f"{tool_name.lower()}_wrapper.py",
-        command_line=f"python <libdir>{tool_name.lower()}_wrapper.py --help",
+        wrapper_script=f"{tool_name.lower()}_wrapper{_placeholder_ext}",
+        command_line=f"{_placeholder_runner} <libdir>{tool_name.lower()}_wrapper{_placeholder_ext} --help",
         parameters=[],
         docker_image_tag=f"genepattern/{tool_name.lower()}:1"
     )

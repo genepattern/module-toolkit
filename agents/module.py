@@ -398,7 +398,13 @@ class ModuleAgent:
                     'bash': '.sh',
                     'shell': '.sh',
                     'perl': '.pl',
-                    'java': '.java'
+                    # JVM-based tools (Java, Scala, Groovy, Kotlin) are wrapped
+                    # with a bash script that invokes the tool via subprocess/gatk/java.
+                    # A Java source-file wrapper is never appropriate for GenePattern.
+                    'java': '.sh',
+                    'scala': '.sh',
+                    'groovy': '.sh',
+                    'kotlin': '.sh',
                 }
                 extension = extension_map.get(tool_language, '.py')
                 filename = f'wrapper{extension}'
@@ -789,6 +795,38 @@ Make sure the generated artifact follows all guidelines, key requirements and cr
                     if tool_info.get('instructions'):
                         instructions_section = f"\n\nIMPORTANT - Additional Instructions:\n{tool_info['instructions']}\n"
 
+                    # Determine the wrapper language explicitly so the LLM cannot
+                    # oscillate between bash and Python across retry attempts.
+                    _tool_lang = tool_info.get('language', 'python').lower()
+                    _jvm_langs = {'java', 'scala', 'groovy', 'kotlin'}
+                    if _tool_lang in _jvm_langs:
+                        _wrapper_lang = 'bash'
+                        _wrapper_lang_rationale = (
+                            f"The tool is implemented in {tool_info.get('language', 'Java')}. "
+                            "GenePattern wrappers for JVM-based tools MUST be written as bash scripts "
+                            "that invoke the tool via its command-line interface (e.g. `gatk`, `java -jar`). "
+                            "Do NOT write a Java, Python, or any other language wrapper."
+                        )
+                    elif _tool_lang == 'r':
+                        _wrapper_lang = 'R'
+                        _wrapper_lang_rationale = "The tool is R-based; write an R wrapper script."
+                    elif _tool_lang in ('bash', 'shell'):
+                        _wrapper_lang = 'bash'
+                        _wrapper_lang_rationale = "The tool is shell-based; write a bash wrapper script."
+                    else:
+                        _wrapper_lang = 'python'
+                        _wrapper_lang_rationale = "Write a Python wrapper script using argparse and subprocess."
+
+                    _wrapper_script_name = planning_data_dict.get('wrapper_script', filename)
+                    wrapper_language_section = (
+                        f"\n\n🔒 WRAPPER LANGUAGE IS FIXED — DO NOT CHANGE THIS 🔒\n"
+                        f"You MUST write this wrapper as a {_wrapper_lang.upper()} script.\n"
+                        f"Rationale: {_wrapper_lang_rationale}\n"
+                        f"The output file will be saved as '{_wrapper_script_name}'. "
+                        f"Its shebang line and syntax MUST match {_wrapper_lang.upper()}.\n"
+                        f"This constraint applies to ALL retry attempts — do not switch languages to fix errors.\n"
+                    )
+
                     # Build an explicit list of parameter names from planning data so the
                     # LLM cannot silently substitute its own names.
                     param_names_section = ""
@@ -814,6 +852,7 @@ Make sure the generated artifact follows all guidelines, key requirements and cr
 
                     error_history = build_error_history()
                     prompt = f"""Generate the wrapper artifact for the GenePattern module '{tool_info['name']}'.
+{wrapper_language_section}
 {param_names_section}
 {error_history if error_history else ""}
 {downstream_section}
