@@ -1223,6 +1223,21 @@ Make sure the generated artifact follows all guidelines, key requirements and cr
         )
         self.save_status(status)
 
+    def _get_manifest_docker_image(self, module_path: Path) -> Optional[str]:
+        """Read job.docker.image from the manifest file, unescaping colons."""
+        manifest_path = module_path / 'manifest'
+        if not manifest_path.exists():
+            return None
+        try:
+            for line in manifest_path.read_text(encoding='utf-8').splitlines():
+                line = line.strip()
+                if line.startswith('job.docker.image='):
+                    value = line[len('job.docker.image='):]
+                    return value.replace('\\:', ':')
+        except Exception:
+            pass
+        return None
+
     def generate_all_artifacts(self, tool_info: Dict[str, str], planning_data: ModulePlan, module_path: Path, status: ModuleGenerationStatus, skip_artifacts: List[str] = None, max_loops: int = MAX_ARTIFACT_LOOPS, max_escalations: int = MAX_ESCALATIONS, no_zip: bool = False, zip_only: bool = False, gp_server: Optional[str] = None, gp_user: Optional[str] = None, gp_password: Optional[str] = None) -> bool:
         """Run artifact generation phase with cross-artifact error escalation."""
         self.logger.print_section("Artifact Generation Phase")
@@ -1272,6 +1287,25 @@ Make sure the generated artifact follows all guidelines, key requirements and cr
                 # was not triggered (e.g. wrapper generation failed but the run
                 # is being resumed with the file already present).
                 if artifact_name == 'dockerfile':
+                    # Skip Dockerfile generation when the user supplied a base
+                    # image AND the manifest already points to that same image —
+                    # the existing image will be used directly, so no build is needed.
+                    user_base_image = tool_info.get('base_image', '').strip()
+                    if user_base_image:
+                        manifest_image = self._get_manifest_docker_image(module_path)
+                        if manifest_image and manifest_image == user_base_image:
+                            self.logger.print_status(
+                                f"⏭  Skipping Dockerfile generation — manifest already uses "
+                                f"base image '{user_base_image}' as job.docker.image"
+                            )
+                            status.artifacts_status['dockerfile'] = {
+                                'generated': True, 'validated': True, 'skipped': True,
+                                'attempts': 0, 'errors': [],
+                            }
+                            self.save_status(status)
+                            idx += 1
+                            continue
+
                     self._sync_wrapper_script(
                         planning_data, module_path, status,
                         context="pre-dockerfile assertion",
@@ -1595,14 +1629,15 @@ Make sure the generated artifact follows all guidelines, key requirements and cr
 
         print(f"\nArtifact Status:")
         for artifact_name, artifact_status in status.artifacts_status.items():
-            generated = "✓" if artifact_status['generated'] else "❌"
-            validated = "✓" if artifact_status['validated'] else "❌"
-            attempts = artifact_status['attempts']
+            generated = "✓" if artifact_status.get('generated') else "❌"
+            validated = "✓" if artifact_status.get('validated') else "❌"
+            attempts = artifact_status.get('attempts', 0)
+            skipped = " (skipped)" if artifact_status.get('skipped') else ""
 
             print(f"  {artifact_name}:")
-            print(f"    Generated: {generated} | Validated: {validated} | Attempts: {attempts}")
+            print(f"    Generated: {generated} | Validated: {validated} | Attempts: {attempts}{skipped}")
 
-            if artifact_status['errors']:
+            if artifact_status.get('errors'):
                 print(f"    Errors: {len(artifact_status['errors'])}")
                 for error in artifact_status['errors'][:2]:
                     print(f"      - {error}")
