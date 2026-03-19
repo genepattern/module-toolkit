@@ -35,6 +35,23 @@ CRITICAL DOCKER SYNTAX RULES:
 - For optional files, either ensure they exist before building or omit the COPY instruction
 - Shell operators (||, &&, >, 2>&1, etc.) ONLY work in RUN commands, not COPY/ADD
 
+CRITICAL PORTABILITY RULES (multi-platform builds):
+- NEVER hardcode absolute paths to interpreter binaries inside a base image
+  (e.g. do NOT use /opt/conda/bin/python3, /usr/bin/python3.8, etc.).
+  Internal image layouts differ between amd64 and arm64 variants and across versions.
+- Use `which python3` (or `which Rscript`, etc.) to locate interpreters at build time.
+- When an interpreter may be missing, detect it dynamically and fall back to apt/conda:
+    RUN PYTHON3=$(which python3 2>/dev/null || \
+          find /opt/conda /usr/bin /usr/local/bin -name 'python3' -type f 2>/dev/null | head -1) && \
+        if [ -z "$PYTHON3" ]; then \
+            apt-get update && apt-get install -y --no-install-recommends python3 && \
+            apt-get clean && rm -rf /var/lib/apt/lists/* && \
+            PYTHON3=$(which python3); \
+        fi && \
+        ln -sf "$PYTHON3" /usr/local/bin/python
+- This pattern works regardless of whether the base image uses conda, system packages,
+  or a different file-system layout on each CPU architecture.
+
 CRITICAL PACKAGE VALIDATION RULES:
 - ALWAYS call verify_apt_packages BEFORE writing any apt-get install command to confirm every
   package name is valid in the target base image. Do not guess package names.
