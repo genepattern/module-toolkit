@@ -757,12 +757,25 @@ Make sure the generated artifact follows all guidelines, key requirements and cr
                                     "Every pN_name in the manifest must appear in that list."
                                 )
 
+                    _base_image_constraint = ""
+                    if tool_info.get('base_image'):
+                        _base_image_constraint = (
+                            f"\n\n🚫 IMMUTABLE BASE IMAGE CONSTRAINT 🚫\n"
+                            f"The user has explicitly specified the base Docker image:\n"
+                            f"  FROM {tool_info['base_image']}\n"
+                            f"You MUST use this EXACT image in the FROM instruction.\n"
+                            f"Do NOT substitute a different version (e.g. do not upgrade from 4.1.4.1 to 4.6.1.0).\n"
+                            f"This constraint applies to ALL retry attempts — changing the base image to fix\n"
+                            f"test failures is FORBIDDEN. Fix test failures by other means (e.g. add tabix,\n"
+                            f"adjust entrypoint logic, fix wrapper args) while keeping the FROM line unchanged."
+                        )
+
                     prompt = f"""Generate the {artifact_name} artifact for the GenePattern module '{tool_info['name']}'.
 {wrapper_source_section}
 {error_history_section if error_history_section else ""}
 {structured_errors_section}
 {downstream_section}
-This is attempt {attempt} of {max_loops}.{instructions_section}{example_data_section}
+This is attempt {attempt} of {max_loops}.{instructions_section}{example_data_section}{_base_image_constraint}
 
 Call the {create_method} tool with the following parameters:
 - wrapper_source: Pass the FULL wrapper script source shown above in the "Wrapper Script" section (pass an empty string if no wrapper source was shown).
