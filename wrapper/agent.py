@@ -111,6 +111,15 @@ Output Management:
 - Validate output files are created successfully
 - Support different output formats as specified by parameters
 
+ASCII-ONLY STRINGS AND COMMENTS:
+- NEVER use Unicode characters (e.g. ellipsis '…', em-dash '—', curly quotes '"''"', arrows '→',
+  bullet '•', or any character with ord > 127) in log messages, print statements, comments, or
+  any other string literal in the generated wrapper.
+- GenePattern containers may run with an ASCII-only locale; non-ASCII characters in log/print
+  calls will raise UnicodeEncodeError at runtime and crash the module.
+- Use plain ASCII equivalents instead: '...' not '…', '-' or '--' not '—', straight quotes not
+  curly quotes, '*' or '-' not '•', '->' not '→', etc.
+
 REMEMBER: Output ONLY valid code. No explanations, no markdown, no additional text.
 Always generate complete, production-ready wrapper scripts that provide reliable
 integration between GenePattern and bioinformatics tools with excellent user experience.
