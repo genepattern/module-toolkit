@@ -210,7 +210,6 @@ def validate_documentation(context: RunContext[ArtifactDeps], path_or_url: str, 
         return error_msg
 
 
-@documentation_agent.tool
 def analyze_documentation_requirements(context: RunContext[ArtifactDeps], tool_info: Dict[str, Any], parameters: List[Dict[str, Any]] = None, target_audience: str = "mixed") -> str:
     """
     Analyze module information to determine documentation structure and content requirements.
@@ -365,7 +364,6 @@ def analyze_documentation_requirements(context: RunContext[ArtifactDeps], tool_i
     return analysis
 
 
-@documentation_agent.tool
 def generate_documentation_outline(context: RunContext[ArtifactDeps], tool_info: Dict[str, Any], sections: List[str], parameters: List[Dict[str, Any]] = None) -> str:
     """
     Generate a detailed documentation outline with section structure and content guidelines.
@@ -575,7 +573,6 @@ def generate_documentation_outline(context: RunContext[ArtifactDeps], tool_info:
     return outline
 
 
-@documentation_agent.tool
 def optimize_documentation_structure(context: RunContext[ArtifactDeps], existing_content: str, improvement_goals: List[str] = None) -> str:
     """
     Analyze existing documentation and suggest structural and content improvements.

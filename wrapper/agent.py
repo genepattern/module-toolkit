@@ -291,7 +291,6 @@ def validate_wrapper(context: RunContext[ArtifactDeps], script_path: str, parame
         return error_msg
 
 
-@wrapper_agent.tool
 def analyze_wrapper_requirements(context: RunContext[ArtifactDeps], tool_info: Dict[str, Any], parameters: List[Dict[str, Any]] = None, execution_environment: str = "container") -> str:
     """
     Analyze tool information to determine optimal wrapper script requirements and implementation strategy.
@@ -480,7 +479,6 @@ def analyze_wrapper_requirements(context: RunContext[ArtifactDeps], tool_info: D
     return analysis
 
 
-@wrapper_agent.tool
 def generate_wrapper_structure(context: RunContext[ArtifactDeps], language: str, parameters: List[Dict[str, Any]], tool_command: str) -> str:
     """
     Generate the basic structure and key components for a wrapper script in the specified language.
@@ -740,7 +738,6 @@ def generate_wrapper_structure(context: RunContext[ArtifactDeps], language: str,
     return structure
 
 
-@wrapper_agent.tool
 def optimize_wrapper_performance(context: RunContext[ArtifactDeps], wrapper_content: str, performance_goals: List[str] = None) -> str:
     """
     Analyze wrapper script content and suggest performance optimizations and best practices.

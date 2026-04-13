@@ -533,7 +533,6 @@ def parse_repository_info(context: RunContext[str], repo_url: str, readme_conten
     return analysis
 
 
-@researcher_agent.tool
 def create_tool_research_report(context: RunContext[str], tool_name: str, research_findings: List[Dict[str, Any]]) -> str:
     """
     Create a comprehensive research report combining multiple research findings.
@@ -714,7 +713,6 @@ def create_tool_research_report(context: RunContext[str], tool_name: str, resear
     return report
 
 
-@researcher_agent.tool
 def analyze_parameter_patterns(context: RunContext[str], parameter_list: List[str], usage_examples: str = None) -> str:
     """
     Analyze parameter usage patterns to identify groupings and relationships.
@@ -872,7 +870,6 @@ def analyze_parameter_patterns(context: RunContext[str], parameter_list: List[st
     return analysis
 
 
-@researcher_agent.tool
 def compare_similar_tools(context: RunContext[str], target_tool: str, similar_tools: List[Dict[str, str]]) -> str:
     """
     Compare the target tool with similar tools to highlight unique features and positioning.

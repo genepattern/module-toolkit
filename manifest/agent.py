@@ -208,7 +208,6 @@ def validate_manifest(context: RunContext[ArtifactDeps], path: str) -> str:
         return error_msg
 
 
-@manifest_agent.tool
 def analyze_module_metadata(context: RunContext[ArtifactDeps], tool_name: str, tool_info: Dict[str, Any], parameters: List[Dict[str, Any]] = None) -> str:
     """
     Analyze module information to determine appropriate manifest metadata and structure.
@@ -425,7 +424,6 @@ def generate_manifest_content(context: RunContext[ArtifactDeps], manifest_data: 
     return result
 
 
-@manifest_agent.tool
 def optimize_command_line_template(context: RunContext[ArtifactDeps], current_command: str, parameters: List[Dict[str, Any]], tool_info: Dict[str, Any] = None) -> str:
     """
     Analyze and optimize a command line template for better GenePattern integration.

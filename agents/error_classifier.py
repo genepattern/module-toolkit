@@ -120,6 +120,30 @@ _RULES: List[tuple] = [
     # the wrapper does not recognise → the manifest parameter names or the wrapper
     # add_argument flags must be aligned.  Escalate to manifest first so the
     # commandLine / pN_name entries are fixed to match what the wrapper declares.
+
+    # -- argparse 'invalid choice' — manifest default_value is wrong ----------
+    # When argparse rejects a value as 'invalid choice', the value being passed
+    # comes from the manifest (default_value or a pN_value choice list that does
+    # not align with the wrapper's choices).  This is a manifest problem: the
+    # pN_default_value and pN_value entries must use values that the wrapper's
+    # argparse choices actually accept (e.g. 'yes'/'no' not 'true'/'false').
+    (
+        re.compile(
+            r"error: argument\s+(\S+):\s*invalid choice:\s*['\"]?([^'\"(]+?)['\"]?"
+            r"\s*\(choose from\s*([^)]+)\)",
+            re.IGNORECASE,
+        ),
+        "manifest",
+        "The manifest passes an invalid value for argument {match} that the wrapper "
+        "does not accept. This is a manifest default_value / choice-list mismatch: "
+        "the pN_default_value and pN_value entries for this parameter must use values "
+        "from the wrapper's accepted choices. "
+        "Update the manifest so that every default_value and every choice value "
+        "exactly matches one of the strings the wrapper's argparse choices= list "
+        "accepts (e.g. use 'yes'/'no' not 'true'/'false', or '1'/'0' not 'yes'/'no', "
+        "depending on what the wrapper declares).",
+    ),
+
     (
         re.compile(
             r"unrecognized arguments?:\s*((?:--[\w.]+\s*)+)",
@@ -153,7 +177,7 @@ _RULES: List[tuple] = [
     ),
     (
         re.compile(
-            r"error: argument\s+(\S+):\s*(.+)",
+            r"error: argument\s+(\S+):\s*(?!invalid choice)(.+)",
             re.IGNORECASE,
         ),
         "wrapper",
