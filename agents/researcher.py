@@ -7,6 +7,7 @@ import requests
 from typing import List, Dict, Any
 from pydantic_ai import Agent, RunContext
 from dotenv import load_dotenv
+from tavily import TavilyClient
 from .models import configured_llm_model
 
 # Load environment variables from .env file
@@ -114,28 +115,28 @@ Include references and maintain scientific rigor in all analyses.
 # ---------------------------------------------------------------------------
 # Agent construction — web search strategy depends on available API keys
 # ---------------------------------------------------------------------------
-# When BRAVE_API_KEY is set the custom Brave web_search tool is registered
-# below (rate-limited, with full page-content extraction).
+# Priority order for web search:
+#   1. TAVILY_API_KEY  — preferred; purpose-built for AI agents, returns rich
+#                        snippets so _extract_page_content is not required.
+#   2. BRAVE_API_KEY   — fallback; rate-limited custom tool with page extraction.
+#   3. (none)          — no web search tool registered; the agent relies on
+#                        parse_repository_info and analyze_tool_documentation.
 #
-# When BRAVE_API_KEY is absent we do NOT add any WebSearch capability.
 # WebSearch(builtin=True) hard-errors on Bedrock ("WebSearchTool not
 # supported by this model"), and WebSearch(local=False) does the same.
 # The local DuckDuckGo fallback uses primp which can hang indefinitely.
-# The researcher already fetches real content via parse_repository_info and
-# analyze_tool_documentation, so the agent works well without web search.
 
-_brave_api_key = os.getenv('BRAVE_API_KEY')
-_capabilities: list = []   # extended below when Brave key is present
+_tavily_api_key = os.getenv('TAVILY_API_KEY')
+_brave_api_key  = os.getenv('BRAVE_API_KEY')
+_capabilities: list = []   # extended below when a search key is present
 
 researcher_agent = Agent(configured_llm_model(), instructions=system_prompt, capabilities=_capabilities)
 
 
-def _web_search_impl(context: RunContext[str], query: str, num_results: int = 5) -> str:
-    """
-    Search the web using Brave Search API and extract content from relevant pages.
+def _brave_web_search(context: RunContext[str], query: str, num_results: int = 5) -> str:
+    """Search the web using Brave Search API and extract content from relevant pages.
 
-    Only registered on the agent when BRAVE_API_KEY is configured.  Without it
-    the native WebSearch capability (DuckDuckGo fallback) handles all searching.
+    Only registered when BRAVE_API_KEY is set and TAVILY_API_KEY is absent.
 
     Args:
         query: Search query string
@@ -270,12 +271,74 @@ def _extract_page_content(url: str) -> str:
         return ""
 
 
-# Register Brave web_search only when the API key is available.
-# Without Brave there is no web search tool — the agent uses parse_repository_info
-# and analyze_tool_documentation to fetch real content from known URLs instead.
-if _brave_api_key:
-    researcher_agent.tool(_web_search_impl)
-    web_search = _web_search_impl   # preserve importable name for tests
+def _tavily_web_search(context: RunContext[str], query: str, num_results: int = 5) -> str:
+    """Search the web using the Tavily API.
+
+    Tavily returns pre-extracted page content, so no secondary HTTP fetch is
+    needed (unlike the Brave implementation).
+    """
+    print(f"🔍 RESEARCH TOOL: Running web_search (Tavily) for query: '{query}' (requesting {num_results} results)")
+
+    try:
+        client = TavilyClient(api_key=_tavily_api_key)
+        response = client.search(
+            query=query,
+            max_results=min(num_results, 10),
+            include_answer=False,
+            search_depth="advanced",
+        )
+
+        results = response.get("results", [])
+        if not results: return f"No search results found for query: '{query}'"
+
+        # Build output in the same format as the Brave implementation
+        formatted = f"Web Search Results for: '{query}'\n"
+        formatted += "=" * (30 + len(query)) + "\n\n"
+
+        for i, result in enumerate(results[:num_results], 1):
+            title   = result.get("title", "No Title")
+            url     = result.get("url", "No URL")
+            content = result.get("content", "No content available")
+
+            formatted += f"**Result {i}: {title}**\n"
+            formatted += f"URL: {url}\n"
+            formatted += f"Content Preview: {content[:300]}{'...' if len(content) > 300 else ''}\n"
+            formatted += "\n" + "-" * 50 + "\n\n"
+
+        formatted += f"**Search Metadata:**\n"
+        formatted += f"Results displayed: {len(results[:num_results])}\n"
+        formatted += f"Query processed: {query}\n"
+
+        print(f"✅ RESEARCH TOOL: web_search (Tavily) completed — {len(results)} results")
+        return formatted
+
+    except Exception as e:
+        print(f"❌ RESEARCH TOOL: web_search (Tavily) failed: {e}")
+        return f"Unexpected error during Tavily web search: {e}"
+
+
+@researcher_agent.tool
+def web_search(context: RunContext[str], query: str, num_results: int = 5) -> str:
+    """Search the web for information about a bioinformatics tool or topic.
+
+    Uses Tavily when TAVILY_API_KEY is set (preferred), Brave Search when only
+    BRAVE_API_KEY is set, or returns an error if neither key is configured.
+
+    Args:
+        query: Search query string
+        num_results: Number of results to return (default: 5, max 10)
+
+    Returns:
+        Formatted search results with title, URL, and content per result
+    """
+    if _tavily_api_key:   return _tavily_web_search(context, query, num_results)
+    if _brave_api_key:    return _brave_web_search(context, query, num_results)
+    return "Web search is unavailable: set TAVILY_API_KEY or BRAVE_API_KEY to enable it."
+
+
+# ---------------------------------------------------------------------------
+# Tool registration — Tavily preferred, Brave as fallback, else no web search.
+# ---------------------------------------------------------------------------
 
 
 @researcher_agent.tool

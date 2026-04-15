@@ -60,7 +60,8 @@ cp .env.example .env   # then edit as needed
 | Variable | Default | Description |
 |---|---|---|
 | `DEFAULT_LLM_MODEL` | `Qwen3` | LLM powering all agents |
-| `BRAVE_API_KEY` | *(none)* | Enables web research (strongly recommended) |
+| `TAVILY_API_KEY` | *(none)* | Enables web research via Tavily (preferred, strongly recommended) |
+| `BRAVE_API_KEY` | *(none)* | Enables web research via Brave Search (used when `TAVILY_API_KEY` is absent) |
 | `MAX_ARTIFACT_LOOPS` | `5` | Max validation retries per artifact |
 | `MAX_ESCALATIONS` | `2` | Max cross-artifact escalation attempts per artifact pair |
 | `MODULE_OUTPUT_DIR` | `./generated-modules` | Where modules are written |

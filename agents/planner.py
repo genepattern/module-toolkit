@@ -143,6 +143,7 @@ any user-provided instructions.
 planner_agent = Agent(configured_llm_model(), instructions=system_prompt, output_type=ModulePlan, retries=MAX_ARTIFACT_LOOPS)
 
 
+@planner_agent.tool
 def create_structured_plan(context: RunContext[ModulePlan], tool_name: str, research_data: str = None) -> ModulePlan:
     """
     Create a comprehensive structured plan for a GenePattern module based on tool analysis.
